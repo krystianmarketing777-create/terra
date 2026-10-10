@@ -24,15 +24,42 @@ const NPC = {
   'npc:transport': { name: 'Bractwo Dróżników', color: '#8a7a55', npc: true, lore: 'trzymają przystanki i rozstaje' },
   'npc:zabudowa': { name: 'Domowiki', color: '#8a7a55', npc: true, lore: 'duszki podwórek i kamienic' },
 };
-const ME_INFO = { name: 'Ty', color: '#1971c2' };
+// Avatar gracza: zwierzak, kolor terenu i nick. Kolory gracza są chłodne, botów ciepłe, żeby się nie myliły.
+const AVATARS = ['🦊', '🐺', '🦉', '🐻', '🦌', '🐗', '🦔', '🐿️', '🐸', '🐢', '🦅', '🐝', '🐱', '🐶', '🦄', '🐉'];
+const PLAYER_COLORS = ['#1971c2', '#364fc7', '#1098ad', '#0ca678', '#2b8a3e', '#495057'];
+const DEFAULT_PROFILE = { name: 'Ty', emoji: '🦊', color: '#1971c2' };
+const meInfo = () => ({ ...DEFAULT_PROFILE, ...(S.profile || {}), lvl: levelOf(scoreOf(ME)) });
 // Symulowani gracze: wyglądają jak ludzie z okolicy.
 const BOT_NAMES = ['kasia_biega', 'Marek_z_Bielan', 'spacerowiczka', 'Ola.z.psem', 'tomek.rower', 'Bartek88', 'Zuza_w_parku',
   'pan_Zdzisiek', 'Iga.run', 'Kuba_Nocny', 'MamaNaSpacerze', 'Rysiek_Kroki', 'Wiktoria.K', 'ProstoZPracy', 'Hania_i_Burek', 'Krokomierz'];
-const BOT_COLORS = ['#e03131', '#7048e8', '#f08c00', '#c2255c', '#5c940d', '#862e9c', '#d9480f', '#0b7285'];
+const BOT_COLORS = ['#e03131', '#7048e8', '#f08c00', '#c2255c', '#862e9c', '#d9480f', '#a61e4d', '#5f3dc4'];
 function owner(id) {
-  if (id === ME) return ME_INFO;
-  return NPC[id] || S.bots[id] || { name: '?', color: '#495057' };
+  if (id === ME) return meInfo();
+  if (S.bots[id]) return { ...S.bots[id], lvl: levelOf(scoreOf(id)) };
+  return NPC[id] || { name: '?', color: '#495057' };
 }
+
+// ---------- Punkty i ranking ----------
+// Punkty: 10 za posiadany heks, 15 za poziom budynku, 20 za km, 10 za szlak, 25 za wygrany pojedynek.
+let scoreCache = { t: 0, map: {} };
+function scores() {
+  const now = Date.now();
+  if (now - scoreCache.t < 1500) return scoreCache.map;
+  const m = {}, add = (id, k, v) => { (m[id] ??= { hexes: 0, buildings: 0, km: 0, routes: 0, duels: 0, total: 0 })[k] += v; };
+  for (const id of [ME, ...Object.keys(S.bots)]) add(id, 'total', 0);
+  for (const h of Object.values(S.hexes)) {
+    if (!h.owner || !m[h.owner]) continue;
+    add(h.owner, 'hexes', 1);
+    add(h.owner, 'buildings', (h.bs || []).reduce((a, b) => a + b.l, 0));
+  }
+  add(ME, 'km', S.stats.meters / 1000); add(ME, 'routes', S.stats.routes); add(ME, 'duels', S.stats.duelsWon);
+  for (const [id, b] of Object.entries(S.bots)) { add(id, 'km', b.km || 0); add(id, 'routes', b.routes || 0); }
+  for (const s of Object.values(m)) s.total = Math.round(s.hexes * 10 + s.buildings * 15 + s.km * 20 + s.routes * 10 + s.duels * 25);
+  scoreCache = { t: now, map: m };
+  return m;
+}
+const scoreOf = id => scores()[id]?.total || 0;
+const levelOf = p => Math.floor(Math.sqrt(p / 40)) + 1;
 const isBot = id => !!(id && S.bots[id]);
 const botIds = () => Object.keys(S.bots);
 const TYPES = {
@@ -89,7 +116,7 @@ function fresh() {
     inv: { ...STARTER },
     hexes: {}, areas: [], cargo: null, bots: {},
     stats: { meters: 0, captured: 0, routes: 0, routeIncome: 0, tollPaid: 0, tollEarned: 0, duelsWon: 0, duelsLost: 0, built: 0 },
-    lastTick: Date.now(), log: [], tune: 5, seat: null, seatShield: 0,
+    lastTick: Date.now(), log: [], tune: 6, seat: null, seatShield: 0, profile: null,
     settings: { vibe: true, voice: false }, q: 0, tasks: [], lastLost: null,
   };
 }
@@ -120,6 +147,16 @@ if (S.tune < 4) {
   S.log.unshift({ t: Date.now(), msg: 'Pakiet startowy: surowce na pierwszy budynek' + (mine.length ? ', a Twój najmocniejszy heks jest teraz Siedzibą' : '') });
   S.tune = 4;
 }
+// Migracja na avatary i punkty: boty dostają zwierzaka, kilometry i ciepły kolor.
+function migrateBots() {
+  Object.values(S.bots).forEach((b, i) => {
+    b.emoji ??= AVATARS[Math.floor(Math.random() * AVATARS.length)];
+    b.km ??= 0.5 + Math.random() * 10;
+    b.routes ??= Math.floor(Math.random() * 4);
+    if (!BOT_COLORS.includes(b.color)) b.color = BOT_COLORS[i % BOT_COLORS.length];
+    delete b.lvl;
+  });
+}
 // Migracja na 2 miejsca budowy i Siedzibę jako oznaczenie heksu (z tygodniową ochroną).
 if (S.tune < 5) {
   for (const [id, h] of Object.entries(S.hexes)) {
@@ -129,6 +166,7 @@ if (S.tune < 5) {
   }
   S.tune = 5;
 }
+if (S.tune < 6) { migrateBots(); S.profile ??= null; S.tune = 6; }
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
@@ -294,7 +332,7 @@ function newBot() {
   if (!free.length) return null;
   const id = 'bot' + Object.keys(S.bots).length;
   S.bots[id] = { name: free[Math.floor(Math.random() * free.length)], color: BOT_COLORS[Object.keys(S.bots).length % BOT_COLORS.length],
-    lvl: 3 + Math.floor(Math.random() * 22) };
+    emoji: AVATARS[Math.floor(Math.random() * AVATARS.length)], km: 0.5 + Math.random() * 10, routes: Math.floor(Math.random() * 4) };
   return id;
 }
 
@@ -590,6 +628,7 @@ function stepWalkers() {
     const step = Math.min(d, speed), f = step / d;
     w.pos = [w.pos[0] + (w.target[0] - w.pos[0]) * f, w.pos[1] + (w.target[1] - w.pos[1]) * f];
     w.trail.push([now, ...w.pos]);
+    if (S.bots[w.bot]) S.bots[w.bot].km = (S.bots[w.bot].km || 0) + step / 1000;
     while (w.trail.length && now - w.trail[0][0] > TRAIL_LEN) w.trail.shift();
     const c = h3.latLngToCell(w.pos[0], w.pos[1], RES), h = S.hexes[c];
     if (!h || h.blocked) { if (h) w.target = randomNear(w.pos, 150, 600); continue; }
@@ -918,7 +957,23 @@ function finishDuel() {
 }
 
 // ---------- Interfejs ----------
-let map, mapReady = false, followOn = true, sel = null;
+let map, mapReady = false, followOn = true, sel = null, meMarker = null;
+// Znacznik gracza na mapie: zwierzak w kółku w kolorze terenu i nick z poziomem.
+function avatarEl() {
+  const el = document.createElement('div');
+  el.className = 'avatar-pin';
+  el.innerHTML = '<span class="face"></span><span class="tag"></span>';
+  updateAvatarEl(el);
+  return el;
+}
+function updateAvatarEl(el) {
+  const p = meInfo(), key = `${p.emoji}|${p.color}|${p.name}|${p.lvl}`;
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.querySelector('.face').textContent = p.emoji;
+  el.querySelector('.face').style.borderColor = p.color;
+  el.querySelector('.tag').textContent = `${p.name} · ${p.lvl}`;
+}
 function setStatus(t) { const el = $('status'); el.textContent = t; el.hidden = !t; }
 function toast(msg) {
   const el = document.createElement('div');
@@ -935,9 +990,58 @@ function log(msg, show = true) {
 const fmtTime = t => new Date(t).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
 
 function renderInv() {
-  $('inv').innerHTML = Object.entries(RESOURCES)
+  const p = scoreOf(ME);
+  const html = `<span class="chip pts" data-open="rank">★ <b>${p}</b> pkt · poz. ${levelOf(p)}</span>` + Object.entries(RESOURCES)
     .map(([k, label]) => `<span class="chip">${label} <b>${Math.floor(S.inv[k])}</b></span>`).join('');
+  if ($('inv').dataset.html !== html) { $('inv').innerHTML = html; $('inv').dataset.html = html; }
 }
+
+// ---------- Avatar ----------
+let avDraft = null;
+function openAvatar() {
+  avDraft = { ...DEFAULT_PROFILE, ...(S.profile || {}) };
+  if (!S.profile) avDraft.name = '';
+  $('avName').value = avDraft.name;
+  $('avEmojis').innerHTML = AVATARS.map(e => `<button data-emoji="${e}">${e}</button>`).join('');
+  $('avColors').innerHTML = PLAYER_COLORS.map(c => `<button data-color="${c}" style="background:${c}" aria-label="kolor"></button>`).join('');
+  renderAvatarPreview();
+  $('avatar').hidden = false;
+}
+function renderAvatarPreview() {
+  $('avPrev').textContent = avDraft.emoji;
+  $('avPrev').style.borderColor = avDraft.color;
+  $('avPrevName').textContent = avDraft.name || 'Twój nick';
+  for (const b of $('avEmojis').children) b.classList.toggle('on', b.dataset.emoji === avDraft.emoji);
+  for (const b of $('avColors').children) b.classList.toggle('on', b.dataset.color === avDraft.color);
+}
+function saveAvatar() {
+  const name = $('avName').value.trim().replace(/\s+/g, '_').slice(0, 16);
+  if (name.length < 3) { toast('Nick musi mieć co najmniej 3 znaki.'); return; }
+  if (Object.values(S.bots).some(b => b.name.toLowerCase() === name.toLowerCase())) { toast('Ten nick jest już zajęty w Twojej okolicy.'); return; }
+  S.profile = { name, emoji: avDraft.emoji, color: avDraft.color };
+  scoreCache.t = 0;
+  $('avatar').hidden = true;
+  buzz('quest');
+  flash(`${avDraft.emoji} ${name}`, 'gotowy do gry');
+  save(); render();
+}
+
+// ---------- Ranking okolicy ----------
+function renderRank() {
+  const sc = scores();
+  const rows = Object.entries(sc).map(([id, v]) => ({ id, ...v, o: owner(id) })).sort((a, b) => b.total - a.total);
+  $('rankList').innerHTML = rows.map((r, i) => `<li class="${r.id === ME ? 'me' : ''}">
+    <span class="pos">${i + 1}</span><span class="face" style="border-color:${r.o.color}">${r.o.emoji || '🙂'}</span>
+    <span class="who"><b>${r.o.name}${r.id === ME ? ' (Ty)' : ''}</b><span>poz. ${levelOf(r.total)} · ${r.hexes} heksów · ${r.km.toFixed(1)} km</span></span>
+    <span class="pts">${r.total}</span></li>`).join('');
+  const m = sc[ME], pos = rows.findIndex(r => r.id === ME) + 1;
+  $('myPoints').innerHTML = `<p>Miejsce <b>${pos}</b> z ${rows.length}.${pos > 1 ? ` Do miejsca wyżej brakuje <b>${rows[pos - 2].total - m.total + 1}</b> pkt.` : ' Prowadzisz w okolicy!'}</p>
+    <dl class="kv"><dt>Heksy</dt><dd>${m.hexes} x 10 = ${m.hexes * 10}</dd><dt>Budynki</dt><dd>${m.buildings} poz. x 15 = ${m.buildings * 15}</dd>
+    <dt>Spacer</dt><dd>${m.km.toFixed(2)} km x 20 = ${Math.round(m.km * 20)}</dd><dt>Szlaki</dt><dd>${m.routes} x 10 = ${m.routes * 10}</dd>
+    <dt>Pojedynki</dt><dd>${m.duels} x 25 = ${m.duels * 25}</dd></dl>
+    <p class="muted">Na razie inni gracze w rankingu są symulowani. Prawdziwy ranking ruszy razem z serwerem gry.</p>`;
+}
+function openRank() { scoreCache.t = 0; renderRank(); $('rank').hidden = false; }
 
 function renderCargo() {
   const c = S.cargo, el = $('cargo');
@@ -1045,6 +1149,7 @@ function renderChips() {
   if (tasks.length) out.push(`<button class="qchip task" data-chip="task">Zadania ze zdjęciem: ${tasks.length}</button>`);
   const html = out.join(''), el = $('chips');
   if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+  el.style.top = Math.round($('top').getBoundingClientRect().bottom + 2) + 'px';
 }
 function showHex(id) {
   if (!id || !S.hexes[id]) return;
@@ -1116,6 +1221,7 @@ function renderMap() {
     lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[ln, la], [S.pos[1], S.pos[0]]] } });
   }
   map.getSource('me').setData({ type: 'FeatureCollection', features: pts });
+  if (meMarker && S.pos) { updateAvatarEl(meMarker.getElement()); meMarker.setLngLat([S.pos[1], S.pos[0]]).addTo(map); }
   map.getSource('cargo').setData({ type: 'FeatureCollection', features: lines });
   map.setFilter('hex-sel', ['==', ['get', 'id'], sel || S.cur || '']);
   map.setFilter('hex-lost', ['==', ['get', 'id'], S.lastLost?.id || '']);
@@ -1151,7 +1257,7 @@ function initMap() {
     map.addLayer({ id: 'walker-dot', type: 'circle', source: 'walker-heads', paint: { 'circle-radius': 6, 'circle-color': ['get', 'color'], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
     map.addLayer({ id: 'walker-label', type: 'symbol', source: 'walker-heads', layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-offset': [0, 1.3], 'text-anchor': 'top' },
       paint: { 'text-color': '#1d2129', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
-    map.addLayer({ id: 'me', type: 'circle', source: 'me', paint: { 'circle-radius': 8, 'circle-color': ME_INFO.color, 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+    meMarker = new maplibregl.Marker({ element: avatarEl(), anchor: 'center' });
     mapReady = true;
     render(); follow(true);
   });
@@ -1183,6 +1289,14 @@ function bindUi() {
     else if (c === 'lost') showHex(S.lastLost?.id);
     else if (c === 'task') showHex((S.tasks || []).find(t => Date.now() < t.until && S.hexes[t.id]?.owner === ME)?.id);
   });
+  $('rankBtn').onclick = openRank;
+  $('rankClose').onclick = () => { $('rank').hidden = true; };
+  $('inv').addEventListener('click', e => { if (e.target.closest('[data-open="rank"]')) openRank(); });
+  $('avatarBtn').onclick = () => { $('menu').hidden = true; openAvatar(); };
+  $('avEmojis').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { avDraft.emoji = b.dataset.emoji; renderAvatarPreview(); } });
+  $('avColors').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { avDraft.color = b.dataset.color; renderAvatarPreview(); } });
+  $('avName').addEventListener('input', e => { avDraft.name = e.target.value.trim(); renderAvatarPreview(); });
+  $('avSave').onclick = saveAvatar;
   $('pocketBtn').onclick = () => { $('pocket').hidden = false; keepAwake(true); renderPocket(); };
   $('pocket').addEventListener('dblclick', () => { $('pocket').hidden = true; });
   $('photoInput').addEventListener('change', e => onPhoto(e.target.files[0]));
@@ -1197,8 +1311,8 @@ function bindUi() {
     try { localStorage.removeItem(KEY); } catch (e) { /* nic */ }
     location.reload();
   };
-  $('startGps').onclick = () => { $('start').hidden = true; setMode('gps'); };
-  $('startTest').onclick = () => { $('start').hidden = true; setMode('test'); };
+  $('startGps').onclick = () => { $('start').hidden = true; setMode('gps'); if (!S.profile) openAvatar(); };
+  $('startTest').onclick = () => { $('start').hidden = true; setMode('test'); if (!S.profile) openAvatar(); };
   $('dGo').onclick = startDuel;
   $('dCancel').onclick = () => { $('duel').hidden = true; };
   $('target').addEventListener('pointerdown', e => {
@@ -1221,7 +1335,7 @@ function main() {
   initMap();
   tick();
   if (!S.mode) $('start').hidden = false;
-  else setMode(S.mode);
+  else { setMode(S.mode); if (!S.profile) openAvatar(); }
   setInterval(tick, 30e3);
   setInterval(stepWalkers, 1000);
   setInterval(renderCargo, 15e3);

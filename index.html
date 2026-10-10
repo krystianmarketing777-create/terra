@@ -8,11 +8,12 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=10">
+<link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
 <header id="top">
   <div id="inv"></div>
+  <button id="rankBtn" aria-label="Ranking" title="Ranking okolicy">🏆</button>
   <button id="pocketBtn" aria-label="Tryb kieszonkowy" title="Tryb kieszonkowy">⏾</button>
   <button id="menuBtn" aria-label="Menu">☰</button>
 </header>
@@ -51,6 +52,7 @@
 <div id="menu" class="overlay panel" hidden>
   <div class="panel-inner">
     <div class="row between"><h2>Menu</h2><button id="menuClose" class="btn">Zamknij</button></div>
+    <button id="avatarBtn" class="btn">Zmień avatar</button>
     <h3>Tryb ruchu</h3>
     <div class="row">
       <button id="modeGps" class="btn">GPS (spacer)</button>
@@ -81,6 +83,30 @@
   </div>
 </div>
 
+<div id="avatar" class="overlay panel" hidden>
+  <div class="panel-inner">
+    <h2>Twój avatar</h2>
+    <p class="muted">Tak zobaczą Cię inni gracze na mapie i w rankingu. Kolor to kolor Twojego terenu.</p>
+    <div class="av-preview"><span id="avPrev" class="face"></span><b id="avPrevName"></b></div>
+    <label class="av-label">Nick <input id="avName" maxlength="16" placeholder="np. Spacerowicz_z_Krakowa" autocomplete="off"></label>
+    <h3>Zwierzak</h3>
+    <div id="avEmojis" class="av-grid"></div>
+    <h3>Kolor terenu</h3>
+    <div id="avColors" class="av-grid"></div>
+    <button id="avSave" class="btn primary wide">Zapisz i graj</button>
+  </div>
+</div>
+
+<div id="rank" class="overlay panel" hidden>
+  <div class="panel-inner">
+    <div class="row between"><h2>Ranking okolicy</h2><button id="rankClose" class="btn">Zamknij</button></div>
+    <p class="muted">Gracze z terenem w Twojej okolicy. Punkty: 10 za posiadany heks, 15 za każdy poziom budynku, 20 za km spaceru, 10 za szlak handlowy, 25 za wygrany pojedynek.</p>
+    <ol id="rankList"></ol>
+    <h3>Twoje punkty</h3>
+    <div id="myPoints"></div>
+  </div>
+</div>
+
 <div id="pocket" class="overlay" hidden>
   <div class="pocket-inner">
     <div class="muted" id="pGps"></div>
@@ -104,6 +130,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

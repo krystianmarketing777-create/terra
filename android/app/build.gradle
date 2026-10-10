@@ -8,7 +8,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Numer wersji rośnie z każdym buildem w chmurze, żeby nowy APK instalował się na starym
-        versionCode (System.getenv('TERRA_VERSION_CODE') ?: '1') as Integer
+        versionCode Integer.parseInt(System.getenv('TERRA_VERSION_CODE') ?: '1')
         versionName "0.1." + (System.getenv('TERRA_VERSION_CODE') ?: '1')
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

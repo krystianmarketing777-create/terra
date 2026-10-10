@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1971c2">
+<title>Terra - pobierz na Androida</title>
+<meta name="description" content="Gra w zajmowanie prawdziwej okolicy. Pobierz Terra na telefon z Androidem.">
+<meta property="og:title" content="Terra - zajmij swoją okolicę">
+<meta property="og:description" content="Gra, w której spacerem zdobywasz prawdziwy teren na mapie. Pobierz na Androida.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root { --bg: #fff; --fg: #1d2129; --muted: #6b7280; --line: #e5e7eb; --primary: #1971c2; --soft: #e7f5ff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1b1e24; --fg: #e9ecef; --muted: #9aa1ab; --line: #343a40; --soft: #12304a; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 28px 16px 40px; }
+  .logo { width: 72px; height: 72px; display: block; margin: 0 auto 10px; }
+  h1 { text-align: center; margin: 0; font-size: 30px; }
+  .lead { text-align: center; color: var(--muted); margin: 6px 0 22px; }
+  .dl { display: block; text-align: center; background: var(--primary); color: #fff; text-decoration: none; font-weight: 700; font-size: 19px;
+    padding: 16px; border-radius: 14px; }
+  .small { text-align: center; color: var(--muted); font-size: 13px; margin: 8px 0 24px; }
+  ol { padding-left: 0; list-style: none; counter-reset: s; margin: 0; }
+  li { counter-increment: s; position: relative; padding: 12px 12px 12px 52px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
+  li::before { content: counter(s); position: absolute; left: 12px; top: 12px; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--soft); color: var(--primary); font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  li b { display: block; }
+  li span { color: var(--muted); font-size: 14px; }
+  .alt { margin-top: 22px; text-align: center; font-size: 14px; color: var(--muted); }
+  .alt a { color: var(--primary); }
+  .note { background: var(--soft); border-radius: 12px; padding: 12px 14px; font-size: 14px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="icon.svg" alt="">
+  <h1>Terra</h1>
+  <p class="lead">Spaceruj i zajmuj prawdziwą okolicę: parki, ulice, rynki. Buduj, handluj i odbijaj teren innym.</p>
+
+  <a class="dl" href="https://github.com/krystianmarketing777-create/terra/releases/latest/download/terra.apk">Pobierz Terra na Androida</a>
+  <p class="small">Plik terra.apk, ok. 5 MB. Wersja testowa, spoza Sklepu Google Play.</p>
+
+  <ol>
+    <li><b>Pobierz plik</b><span>Jeśli Chrome zapyta, czy zachować plik, wybierz „Pobierz mimo to”.</span></li>
+    <li><b>Otwórz pobrany plik</b><span>Z powiadomienia o pobraniu albo z folderu Pobrane.</span></li>
+    <li><b>Zezwól na instalację</b><span>Telefon poprosi o zgodę na instalowanie aplikacji z tego źródła. Włącz „Zezwalaj z tego źródła” i wróć.</span></li>
+    <li><b>Zainstaluj</b><span>Jeśli pojawi się ostrzeżenie Google Play Protect, wybierz „Więcej szczegółów”, a potem „Zainstaluj mimo to”.</span></li>
+    <li><b>Otwórz Terra i zezwól na lokalizację oraz powiadomienia</b><span>Dzięki temu spacer liczy się także przy wygaszonym ekranie, a telefon może leżeć w kieszeni.</span></li>
+  </ol>
+
+  <p class="note">Aplikacja sama pobiera najnowszą wersję gry, więc po instalacji nie trzeba jej co chwilę aktualizować.</p>
+  <p class="alt">Masz iPhone'a albo nie chcesz instalować? <a href="./">Zagraj w przeglądarce</a> (ekran musi być wtedy włączony).</p>
+</main>
+</body>
+</html>

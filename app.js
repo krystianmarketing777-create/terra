@@ -392,6 +392,7 @@ function changeOwner(id, h, from, to, cause) {
     const where = d ? `: ${d.arrow} ${d.m} m, ${d.name}` : '';
     S.lastLost = { id, t: now };
     buzz('lost');
+    notify('Heks utracony', `${to ? owner(to).name + ' przejmuje Twój teren' : 'Wpływ wygasł'}${d ? `: ${d.m} m, ${d.name}` : ''}`);
     say(`Utracono heks${to ? ' na rzecz ' + owner(to).name : ''}. ${d ? d.m + ' metrów, ' + d.name : ''}.`);
     log(`Heks utracony${to ? ', przejmuje go ' + owner(to).name : ', wpływ wygasł'}${where}${buildingNote}`, true);
   }
@@ -444,6 +445,7 @@ function flash(title, sub) {
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => { el.hidden = true; }, 1800);
   pocketEvent(title + (sub ? ' · ' + sub : ''));
+  notify(title, sub);
 }
 
 // ---------- Zadania ----------
@@ -729,13 +731,48 @@ function route(id, h, now) {
   }
 }
 
+// ---------- Aplikacja Android (Capacitor) ----------
+// W aplikacji GPS działa przez wtyczkę w tle: spacer liczy się przy wygaszonym ekranie, a Android pokazuje stałe powiadomienie.
+const CAP = window.Capacitor;
+const NATIVE = !!CAP?.isNativePlatform?.();
+let bgWatcher = null;
+async function nativeStartGps() {
+  try { await CAP.nativePromise('LocalNotifications', 'requestPermissions', {}); } catch (e) { /* bez powiadomień też zadziała */ }
+  bgWatcher = CAP.nativeCallback('BackgroundGeolocation', 'addWatcher', {
+    backgroundTitle: 'Terra: spacer w toku',
+    backgroundMessage: 'Liczę Twój spacer i zajmuję teren. Dotknij, żeby wrócić do gry.',
+    requestPermissions: true, stale: false, distanceFilter: 5,
+  }, (loc, err) => {
+    if (err) {
+      setStatus(err.code === 'NOT_AUTHORIZED' ? 'Brak zgody na lokalizację. Włącz ją w ustawieniach aplikacji Terra.' : 'GPS: ' + (err.message || err));
+      return;
+    }
+    if (!loc) return;
+    onFix({ coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy ?? 20 }, timestamp: loc.time || Date.now() });
+  });
+}
+function nativeStopGps() {
+  if (bgWatcher) { CAP.nativePromise('BackgroundGeolocation', 'removeWatcher', { id: bgWatcher }).catch(() => {}); bgWatcher = null; }
+}
+let notifId = 1;
+// Powiadomienie systemowe, gdy aplikacja jest w tle (ekran wygaszony albo inna aplikacja na wierzchu).
+function notify(title, body) {
+  if (!NATIVE || !document.hidden) return;
+  CAP.nativePromise('LocalNotifications', 'schedule', { notifications: [{ id: notifId++, title, body: body || '' }] }).catch(() => {});
+}
+
 // GPS
 let watchId = null, lastFix = null;
 function setMode(m) {
   if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (NATIVE) nativeStopGps();
   clearInterval(walkTimer);
   S.mode = m;
-  if (m === 'gps') {
+  if (m === 'gps' && NATIVE) {
+    lastFix = null;
+    setStatus('Szukam sygnału GPS…');
+    nativeStartGps();
+  } else if (m === 'gps') {
     if (!navigator.geolocation) { toast('Ta przeglądarka nie udostępnia GPS.'); S.mode = 'test'; }
     else {
       lastFix = null;

@@ -1,0 +1,12 @@
+{
+  "appId": "pl.terragra.app",
+  "appName": "Terra",
+  "webDir": "www",
+  "server": {
+    "url": "https://krystianmarketing777-create.github.io/terra/",
+    "androidScheme": "https"
+  },
+  "android": {
+    "useLegacyBridge": true
+  }
+}

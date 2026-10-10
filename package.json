@@ -1,0 +1,19 @@
+{
+  "name": "terra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Terra - gra w zajmowanie terenu na mapie OSM (strona + aplikacja Android przez Capacitor)",
+  "scripts": {
+    "www": "node scripts/build-www.mjs",
+    "sync": "npm run www && npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor-community/background-geolocation": "1.2.26",
+    "@capacitor/android": "7.6.9",
+    "@capacitor/core": "7.6.9",
+    "@capacitor/local-notifications": "7.0.7"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "7.6.9"
+  }
+}

@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Terra</string>
+    <string name="title_activity_main">Terra</string>
+    <string name="package_name">pl.terragra.app</string>
+    <string name="custom_url_scheme">pl.terragra.app</string>
+    <string name="capacitor_background_geolocation_notification_channel_name">Spacer w Terra</string>
+    <string name="capacitor_background_geolocation_notification_color">#1971c2</string>
+</resources>

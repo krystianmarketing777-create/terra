@@ -8,6 +8,7 @@ const KEY = 'terra.v1';
 const H = 3600e3, DAY = 24 * H;
 const ME = 'ty';
 const CAPTURE = 10, KEEP = 5, MAX_INF = 100;
+const M_PER_POINT = 5;          // 1 pkt wpływu za 5 m: neutralny heks zajmuje się po ok. 50 m, czyli zwykłym przejściem
 const DECAY_PER_DAY = 0.95;     // wpływ zanika o 5% na dobę
 const MAX_SPEED = 5.5;          // m/s (ok. 20 km/h), szybciej ruch nie jest liczony
 const ROUTE_MAX_AGE = H, ROUTE_MIN_DIST = 300;
@@ -67,6 +68,13 @@ function load() {
   return fresh();
 }
 let S = load();
+// Migracja zapisów sprzed obniżenia progów: osłabiamy wpływ strażników i botów, Twój zostaje.
+if (!S.tune) {
+  for (const h of Object.values(S.hexes)) {
+    for (const k in h.inf) if (k !== ME) h.inf[k] = Math.min(h.inf[k] * 0.5, k.startsWith('npc:') ? 18 : 40);
+  }
+  S.tune = 2;
+}
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
@@ -221,7 +229,7 @@ function seedBots(created, mid) {
   for (const c of ok) {
     if (Math.random() > 0.35) continue;
     const h = S.hexes[c], npc = 'npc:' + (h.type || 'zabudowa');
-    h.inf[npc] = 15 + Math.random() * 20;
+    h.inf[npc] = 8 + Math.random() * 10;
     h.owner = npc;
     h.store = 3 + Math.random() * 12;
   }
@@ -235,7 +243,7 @@ function seedBots(created, mid) {
     for (const c of h3.gridDisk(seed, Math.random() < 0.5 ? 1 : 2)) {
       const h = S.hexes[c];
       if (!h || h.blocked || isBot(h.owner) || Math.random() < 0.2) continue;
-      h.inf = { [bot]: 20 + Math.random() * 50 };
+      h.inf = { [bot]: 15 + Math.random() * 25 };
       h.owner = bot;
       h.store = Math.random() * 10;
       if (Math.random() < 0.25) h.b = { t: Math.random() < 0.5 ? 'targ' : 'wieza', l: Math.random() < 0.3 ? 2 : 1 };
@@ -312,7 +320,7 @@ function botActivity(hours) {
   for (const id of ids) {
     const h = S.hexes[id];
     if (h.blocked || !h.owner) continue;
-    if (NPC[h.owner]) { h.inf[h.owner] = Math.min(35, (h.inf[h.owner] || 0) + h0); continue; }
+    if (NPC[h.owner]) { h.inf[h.owner] = Math.min(20, (h.inf[h.owner] || 0) + h0); continue; }
     if (h.owner !== ME) { h.inf[h.owner] = Math.min(MAX_INF, (h.inf[h.owner] || 0) + 3 * h0); continue; }
     // Przechodnie płacą myto na Twoich heksach.
     if (Math.random() < 1 - Math.exp(-0.15 * h0)) { const t = tollOf(h); S.inv.monety += t; S.stats.tollEarned += t; tollIn += t; }
@@ -390,7 +398,7 @@ function stepWalkers() {
       }
     }
     const before = h.owner;
-    botGain(c, h, w.bot, step / 10);
+    botGain(c, h, w.bot, step / M_PER_POINT / 2);
     if (h.owner !== before) dirty = true;
   }
   if (dirty) { dirty = false; save(); render(); } else renderWalkers();
@@ -439,8 +447,19 @@ function moveTo(lat, lng, meters) {
   const h = S.hexes[c];
   if (meters > 0) { S.stats.meters += meters; if (S.cargo) S.cargo.m += meters; }
   if (c !== S.cur) { S.cur = c; if (h) onEnter(c, h); }
-  if (h && meters > 0 && !h.blocked) gain(c, h, meters / 10);
+  if (h && meters > 0 && !h.blocked) gain(c, h, meters / M_PER_POINT);
   save(); render(); follow();
+}
+
+// Ile metrów trzeba przejść po heksie, żeby go zająć (uwzględnia wypieranie właściciela i Wieżę).
+function metersToCapture(h) {
+  const mine = h.inf[ME] || 0;
+  let pts = Math.max(0, CAPTURE - mine);
+  if (h.owner && h.owner !== ME) {
+    const other = h.inf[h.owner] || 0, k = 1 + 1 / (1 + lvl(h, 'wieza'));
+    pts = Math.max(pts, (other - mine) / k + 0.5);
+  }
+  return Math.max(5, Math.ceil(pts * M_PER_POINT / 5) * 5);
 }
 
 function gain(id, h, g) {
@@ -505,21 +524,42 @@ function setMode(m) {
   if (S.mode === 'test' && !S.pos) teleport(...DEFAULT_START);
   save(); render();
 }
+// Diagnostyka GPS widoczna w menu, bo stan gry istnieje tylko na telefonie.
+const diag = { fixes: 0, badAcc: 0, jitter: 0, tooFast: 0, counted: 0, meters: 0, acc: null, speed: null, last: null };
 function onFix(p) {
   const { latitude: lat, longitude: lng, accuracy: acc } = p.coords, t = p.timestamp;
-  if (acc > 40 && S.pos) { setStatus(`Słaby sygnał GPS (±${Math.round(acc)} m)`); return; }
+  diag.fixes++; diag.acc = acc; diag.last = Date.now();
+  if (acc > 50 && S.pos && lastFix) { diag.badAcc++; setStatus(`Słaby sygnał GPS (±${Math.round(acc)} m), ruch wstrzymany`); renderGps(); return; }
   setStatus('');
-  if (!lastFix || !S.pos) { lastFix = { lat, lng, t }; followOn = true; moveTo(lat, lng, 0); return; }
+  if (!lastFix || !S.pos) { lastFix = { lat, lng, t }; followOn = true; moveTo(lat, lng, 0); renderGps(); return; }
   const d = dist([lastFix.lat, lastFix.lng], [lat, lng]);
-  if (d < 4) return;
+  // Drgania GPS: przesunięcie mniejsze niż dokładność odczytu (min. 10 m) czekamy, aż się zsumuje.
+  if (d < Math.max(10, acc * 1.2)) { diag.jitter++; renderGps(); return; }
   const v = d / Math.max((t - lastFix.t) / 1000, 1);
+  diag.speed = v;
   lastFix = { lat, lng, t };
   if (v > MAX_SPEED) {
+    diag.tooFast++;
     setStatus('Za szybko (ponad 20 km/h): ten odcinek nie jest liczony');
-    S.pos = [lat, lng]; S.cur = h3.latLngToCell(lat, lng, RES); ensureArea(lat, lng); render(); follow();
+    S.pos = [lat, lng]; S.cur = h3.latLngToCell(lat, lng, RES); ensureArea(lat, lng); render(); follow(); renderGps();
     return;
   }
+  diag.counted++; diag.meters += d;
   moveTo(lat, lng, d);
+  renderGps();
+}
+function renderGps() {
+  const el = $('gps');
+  if (S.mode !== 'gps') { el.hidden = true; return; }
+  el.hidden = false;
+  const age = diag.last ? Math.round((Date.now() - diag.last) / 1000) : null;
+  el.textContent = diag.acc == null ? 'GPS: szukam…'
+    : `GPS ±${Math.round(diag.acc)} m · ${diag.speed == null ? '-' : (diag.speed * 3.6).toFixed(1)} km/h${age > 15 ? ` · brak odczytu ${age} s` : ''}`;
+}
+function diagHtml() {
+  return `<dl class="kv"><dt>Odczyty GPS</dt><dd>${diag.fixes}</dd><dt>Zaliczone odcinki</dt><dd>${diag.counted} (${Math.round(diag.meters)} m)</dd>
+    <dt>Odrzucone: słaby sygnał</dt><dd>${diag.badAcc}</dd><dt>Odrzucone: drgania &lt;4 m</dt><dd>${diag.jitter}</dd>
+    <dt>Odrzucone: za szybko</dt><dd>${diag.tooFast}</dd><dt>Ostatnia dokładność</dt><dd>${diag.acc == null ? '-' : '±' + Math.round(diag.acc) + ' m'}</dd></dl>`;
 }
 
 // Tryb testowy: chodzenie po kliknięciu.
@@ -663,6 +703,12 @@ function renderCard() {
       <dt>Wpływ</dt><dd>${infRows(h)}</dd>
     </dl>`;
   }
+  if (here && !h.blocked && h.owner !== ME) {
+    const left = metersToCapture(h);
+    html += now < (h.protect || 0) && h.owner
+      ? `<div class="progress">Heks jest pod ochroną do ${fmtTime(h.protect)}. Teraz nie da się go wypierać.</div>`
+      : `<div class="progress">Do zajęcia zostało ok. <b>${left} m</b> chodzenia po tym heksie${h.owner ? ' albo wygrany pojedynek' : ''}.</div>`;
+  }
   const acts = [];
   if (!here && S.mode === 'test' && !h.blocked) acts.push('<button class="btn primary" data-act="walk">Idź tutaj</button>');
   if (here && h.owner === ME) {
@@ -695,12 +741,13 @@ function renderMenu() {
     <dt>Zdobyte łącznie</dt><dd>${st.captured}</dd><dt>Szlaki handlowe</dt><dd>${st.routes} (+${st.routeIncome} monet)</dd>
     <dt>Myto zapłacone</dt><dd>${st.tollPaid}</dd><dt>Myto zarobione</dt><dd>${st.tollEarned}</dd>
     <dt>Pojedynki</dt><dd>${st.duelsWon} wygrane, ${st.duelsLost} przegrane</dd></dl>`;
-  $('log').innerHTML = S.log.slice(0, 30).map(e => `<li><span class="muted">${fmtTime(e.t)}</span> ${e.msg}</li>`).join('') || '<li class="muted">pusto</li>';
+  $('diag').innerHTML = diagHtml();
+  $('log').innerHTML =S.log.slice(0, 30).map(e => `<li><span class="muted">${fmtTime(e.t)}</span> ${e.msg}</li>`).join('') || '<li class="muted">pusto</li>';
 }
 
 let mapQueued = false;
 function render() {
-  renderInv(); renderCargo(); renderCard();
+  renderInv(); renderCargo(); renderCard(); renderGps();
   if (!$('menu').hidden) renderMenu();
   if (mapReady && !mapQueued) { mapQueued = true; requestAnimationFrame(() => { mapQueued = false; renderMap(); }); }
 }

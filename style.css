@@ -146,3 +146,4 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 #rankList .who b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rankList .who span { font-size: 12px; color: var(--muted); }
 #rankList .pts { font-weight: 700; }
+.qchip.install { background: #1971c2; color: #fff; font-weight: 600; }

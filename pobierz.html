@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#1971c2">
-<title>Terra - pobierz na Androida</title>
-<meta name="description" content="Gra w zajmowanie prawdziwej okolicy. Pobierz Terra na telefon z Androidem.">
+<title>Terra - zajmij swoją okolicę</title>
+<meta name="description" content="Gra w zajmowanie prawdziwej okolicy. Zagraj w przeglądarce telefonu, bez instalacji.">
 <meta property="og:title" content="Terra - zajmij swoją okolicę">
-<meta property="og:description" content="Gra, w której spacerem zdobywasz prawdziwy teren na mapie. Pobierz na Androida.">
+<meta property="og:description" content="Gra, w której spacerem zdobywasz prawdziwy teren na mapie. Zagraj w przeglądarce, bez instalacji.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta property="og:image" content="https://krystianmarketing777-create.github.io/terra/icon-512.png">
 <style>
   :root { --bg: #fff; --fg: #1d2129; --muted: #6b7280; --line: #e5e7eb; --primary: #1971c2; --soft: #e7f5ff; }
   @media (prefers-color-scheme: dark) { :root { --bg: #1b1e24; --fg: #e9ecef; --muted: #9aa1ab; --line: #343a40; --soft: #12304a; } }
@@ -27,8 +28,12 @@
     background: var(--soft); color: var(--primary); font-weight: 700; display: flex; align-items: center; justify-content: center; }
   li b { display: block; }
   li span { color: var(--muted); font-size: 14px; }
-  .alt { margin-top: 22px; text-align: center; font-size: 14px; color: var(--muted); }
-  .alt a { color: var(--primary); }
+  .adv { margin-top: 20px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
+  .adv summary { cursor: pointer; font-weight: 600; }
+  .dl2 { display: inline-block; margin: 6px 0; color: var(--primary); font-weight: 700; }
+  .mini { list-style: decimal; padding-left: 20px; counter-reset: none; }
+  .mini li { border: 0; padding: 2px 0; margin: 0; }
+  .mini li::before { content: none; }
   .note { background: var(--soft); border-radius: 12px; padding: 12px 14px; font-size: 14px; margin-top: 18px; }
 </style>
 </head>
@@ -38,19 +43,28 @@
   <h1>Terra</h1>
   <p class="lead">Spaceruj i zajmuj prawdziwą okolicę: parki, ulice, rynki. Buduj, handluj i odbijaj teren innym.</p>
 
-  <a class="dl" href="https://github.com/krystianmarketing777-create/terra/releases/latest/download/terra.apk">Pobierz Terra na Androida</a>
-  <p class="small">Plik terra.apk, ok. 4 MB. Wersja testowa, spoza Sklepu Google Play.</p>
+  <a class="dl" href="./">Graj teraz</a>
+  <p class="small">Działa od razu w przeglądarce telefonu. Bez instalacji i bez zakładania konta.</p>
 
   <ol>
-    <li><b>Pobierz plik</b><span>Jeśli Chrome zapyta, czy zachować plik, wybierz „Pobierz mimo to”.</span></li>
-    <li><b>Otwórz pobrany plik</b><span>Z powiadomienia o pobraniu albo z folderu Pobrane.</span></li>
-    <li><b>Zezwól na instalację</b><span>Telefon poprosi o zgodę na instalowanie aplikacji z tego źródła. Włącz „Zezwalaj z tego źródła” i wróć.</span></li>
-    <li><b>Zainstaluj</b><span>Jeśli pojawi się ostrzeżenie Google Play Protect, wybierz „Więcej szczegółów”, a potem „Zainstaluj mimo to”.</span></li>
-    <li><b>Otwórz Terra i zezwól na lokalizację oraz powiadomienia</b><span>Dzięki temu spacer liczy się także przy wygaszonym ekranie, a telefon może leżeć w kieszeni.</span></li>
+    <li><b>Dotknij „Graj teraz”</b><span>Gra otworzy się w przeglądarce.</span></li>
+    <li><b>Zezwól na lokalizację i stwórz avatar</b><span>Wybierz zwierzaka, kolor swojego terenu i nick.</span></li>
+    <li><b>Dodaj Terrę do ekranu głównego</b><span>Gra sama zaproponuje to jednym dotknięciem. Od tej pory otwierasz ją jak zwykłą aplikację, na pełnym ekranie.</span></li>
   </ol>
 
-  <p class="note">Aplikacja sama pobiera najnowszą wersję gry, więc po instalacji nie trzeba jej co chwilę aktualizować.</p>
-  <p class="alt">Masz iPhone'a albo nie chcesz instalować? <a href="./">Zagraj w przeglądarce</a> (ekran musi być wtedy włączony).</p>
+  <p class="note">Podczas spaceru ekran musi być włączony. Włącz w grze tryb kieszonkowy (ikona księżyca): ekran jest wtedy czarny, oszczędza baterię, a o zdobyczach informuje wibracja.</p>
+
+  <details class="adv">
+    <summary>Dla zaawansowanych: aplikacja na Androida z wygaszonym ekranem</summary>
+    <p>Aplikacja liczy spacer także przy wygaszonym ekranie. Instaluje się spoza Sklepu Google Play, więc telefon poprosi o kilka zgód i może wyświetlić ostrzeżenie.</p>
+    <a class="dl2" href="https://github.com/krystianmarketing777-create/terra/releases/latest/download/terra.apk">Pobierz terra.apk (ok. 4 MB)</a>
+    <ol class="mini">
+      <li>Otwórz pobrany plik.</li>
+      <li>Zezwól na instalację z tego źródła.</li>
+      <li>Przy ostrzeżeniu Play Protect wybierz „Więcej szczegółów”, a potem „Zainstaluj mimo to”.</li>
+      <li>Zezwól na lokalizację i powiadomienia.</li>
+    </ol>
+  </details>
 </main>
 </body>
 </html>

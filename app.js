@@ -1026,6 +1026,37 @@ function saveAvatar() {
   save(); render();
 }
 
+// ---------- Instalacja na ekranie głównym i zaproszenia ----------
+// Na Androidzie Chrome pozwala dodać grę do ekranu głównego jednym dotknięciem (bez sklepu i ostrzeżeń).
+const GAME_URL = 'https://krystianmarketing777-create.github.io/terra/';
+let installEvt = null;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; renderInstall(); render(); });
+window.addEventListener('appinstalled', () => { installEvt = null; S.installed = true; log('Terra jest na ekranie głównym. Otwieraj ją stamtąd.', true); save(); renderInstall(); render(); });
+const canInstall = () => !NATIVE && !isStandalone() && !!installEvt;
+function renderInstall() {
+  $('installBtn').hidden = !canInstall();
+  $('startInstall').hidden = !canInstall();
+  $('iosHint').hidden = !(isIOS() && !isStandalone());
+}
+async function doInstall() {
+  if (!installEvt) { toast(isIOS() ? 'Dotknij Udostępnij, a potem „Do ekranu początkowego”.' : 'W menu przeglądarki wybierz „Dodaj do ekranu głównego”.'); return; }
+  installEvt.prompt();
+  try { await installEvt.userChoice; } catch (e) { /* zamknięte okno */ }
+  installEvt = null;
+  renderInstall(); render();
+}
+async function invite() {
+  const p = meInfo();
+  const text = `Zajmuję okolicę w grze Terra jako ${p.emoji} ${p.name} (${scoreOf(ME)} pkt). Dołącz i spróbuj odbić mój teren!`;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'Terra', text, url: GAME_URL }); return; }
+    await navigator.clipboard.writeText(`${text} ${GAME_URL}`);
+    toast('Skopiowano zaproszenie. Wklej je w komunikatorze.');
+  } catch (e) { /* anulowane */ }
+}
+
 // ---------- Ranking okolicy ----------
 function renderRank() {
   const sc = scores();
@@ -1147,6 +1178,7 @@ function renderChips() {
   }
   const tasks = (S.tasks || []).filter(t => now < t.until && S.hexes[t.id]?.owner === ME);
   if (tasks.length) out.push(`<button class="qchip task" data-chip="task">Zadania ze zdjęciem: ${tasks.length}</button>`);
+  if (canInstall() && S.stats.captured >= 1 && !S.installHide) out.push('<button class="qchip install" data-chip="install">Dodaj Terrę do ekranu głównego (1 dotknięcie)</button>');
   const html = out.join(''), el = $('chips');
   if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
   el.style.top = Math.round($('top').getBoundingClientRect().bottom + 2) + 'px';
@@ -1287,9 +1319,14 @@ function bindUi() {
     const c = b.dataset.chip;
     if (c === 'quest') { const q = QUESTS[S.q]; if (q) toast(q.hint); }
     else if (c === 'lost') showHex(S.lastLost?.id);
+    else if (c === 'install') { S.installHide = true; doInstall(); }
     else if (c === 'task') showHex((S.tasks || []).find(t => Date.now() < t.until && S.hexes[t.id]?.owner === ME)?.id);
   });
   $('rankBtn').onclick = openRank;
+  $('installBtn').onclick = doInstall;
+  $('startInstall').onclick = doInstall;
+  $('inviteBtn').onclick = invite;
+  $('rankInvite').onclick = invite;
   $('rankClose').onclick = () => { $('rank').hidden = true; };
   $('inv').addEventListener('click', e => { if (e.target.closest('[data-open="rank"]')) openRank(); });
   $('avatarBtn').onclick = () => { $('menu').hidden = true; openAvatar(); };
@@ -1332,6 +1369,7 @@ function bindUi() {
 
 function main() {
   bindUi();
+  renderInstall();
   initMap();
   tick();
   if (!S.mode) $('start').hidden = false;

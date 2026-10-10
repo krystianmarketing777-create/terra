@@ -7,8 +7,16 @@
 <title>Terra - prototyp</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="description" content="Gra, w której spacerem zdobywasz prawdziwy teren na mapie: parki, ulice, rynki. Buduj, handluj i odbijaj teren innym.">
+<meta property="og:title" content="Terra - zajmij swoją okolicę">
+<meta property="og:description" content="Spaceruj i zdobywaj prawdziwy teren na mapie. Zagraj w przeglądarce, bez instalacji.">
+<meta property="og:image" content="https://krystianmarketing777-create.github.io/terra/icon-512.png">
+<meta property="og:url" content="https://krystianmarketing777-create.github.io/terra/">
+<meta property="og:type" content="website">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=12">
+<link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
 <header id="top">
@@ -52,7 +60,12 @@
 <div id="menu" class="overlay panel" hidden>
   <div class="panel-inner">
     <div class="row between"><h2>Menu</h2><button id="menuClose" class="btn">Zamknij</button></div>
-    <button id="avatarBtn" class="btn">Zmień avatar</button>
+    <div class="row">
+      <button id="installBtn" class="btn primary" hidden>Zainstaluj Terrę</button>
+      <button id="inviteBtn" class="btn">Zaproś znajomego</button>
+      <button id="avatarBtn" class="btn">Zmień avatar</button>
+    </div>
+    <p id="iosHint" class="muted" hidden>Na iPhonie: dotknij Udostępnij, a potem „Do ekranu początkowego”.</p>
     <h3>Tryb ruchu</h3>
     <div class="row">
       <button id="modeGps" class="btn">GPS (spacer)</button>
@@ -100,6 +113,7 @@
 <div id="rank" class="overlay panel" hidden>
   <div class="panel-inner">
     <div class="row between"><h2>Ranking okolicy</h2><button id="rankClose" class="btn">Zamknij</button></div>
+    <button id="rankInvite" class="btn primary wide">Zaproś znajomego do rywalizacji</button>
     <p class="muted">Gracze z terenem w Twojej okolicy. Punkty: 10 za posiadany heks, 15 za każdy poziom budynku, 20 za km spaceru, 10 za szlak handlowy, 25 za wygrany pojedynek.</p>
     <ol id="rankList"></ol>
     <h3>Twoje punkty</h3>
@@ -124,12 +138,13 @@
     <p>Zajmuj prawdziwą okolicę, zbieraj surowce z parków, sklepów i zabytków, prowadź karawany i pobieraj myto.</p>
     <button id="startGps" class="btn primary">Zacznij spacer (GPS)</button>
     <button id="startTest" class="btn">Tryb testowy (Warszawa)</button>
+    <button id="startInstall" class="btn" hidden>Zainstaluj Terrę na ekranie głównym</button>
     <p class="muted">Prototyp. Postęp zapisuje się tylko na tym urządzeniu. Inni gracze i strażnicy dzikich ziem są na razie symulowani.</p>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

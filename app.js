@@ -15,9 +15,6 @@ const ROUTE_MAX_AGE = H, ROUTE_MIN_DIST = 300;
 const DUEL_STAKE = 10, DUEL_SECONDS = 20;
 const PROTECT = H;              // ochrona świeżo przejętego heksu
 const DEFAULT_START = [52.2477, 21.0137]; // Warszawa, Plac Zamkowy
-// Publiczne serwery Overpass bywają przeciążone (504), więc próbujemy kilku po kolei.
-const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://z.overpass-api.de/api/interpreter',
-  'https://lz4.overpass-api.de/api/interpreter', 'https://overpass-api.de/api/interpreter'];
 
 // Strażnicy dzikich ziem: neutralni, nie atakują, nie pobierają myta, bronią się w pojedynkach.
 const NPC = {
@@ -75,6 +72,11 @@ if (!S.tune) {
   }
   S.tune = 2;
 }
+// Migracja na rozpoznawanie terenu z kafli mapy: wszystkie heksy klasyfikujemy od nowa (właściciel zostaje).
+if (S.tune < 3) {
+  for (const h of Object.values(S.hexes)) h.pending = true;
+  S.tune = 3;
+}
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
@@ -104,101 +106,125 @@ function boundary(id) {
 }
 const center = id => h3.cellToLatLng(id);
 
-// ---------- Dane OSM ----------
-let loading = false, lastFail = 0;
-async function ensureArea(lat, lng) {
-  if (loading || Date.now() - lastFail < 20e3) return;
-  const here = S.hexes[h3.latLngToCell(lat, lng, RES)];
-  if (S.areas.some(a => dist(a, [lat, lng]) < 700) && !(here && here.pending)) return;
-  loading = true;
-  setStatus('Wczytuję okolicę z OpenStreetMap…');
+// ---------- Dane OSM (z kafli mapy OpenFreeMap) ----------
+// Typ terenu czytamy z kafli wektorowych, które mapa i tak pobiera. Nie zależymy od przeciążonych serwerów Overpass.
+function ensureArea(lat, lng) {
+  if (S.areas.some(a => dist(a, [lat, lng]) < 700)) return;
   const mid = h3.latLngToCell(lat, lng, RES);
-  const cells = h3.gridDisk(mid, AREA_K).filter(c => !S.hexes[c] || S.hexes[c].pending);
-  const created = cells.filter(c => !S.hexes[c]);
-  let s = 90, w = 180, n = -90, e = -180;
-  for (const c of cells) for (const [la, ln] of h3.cellToBoundary(c)) {
-    s = Math.min(s, la); n = Math.max(n, la); w = Math.min(w, ln); e = Math.max(e, ln);
-  }
-  let osm = null;
-  try { osm = await fetchOverpass(s, w, n, e); } catch (err) {
-    lastFail = Date.now();
-    toast('Serwer danych OSM jest przeciążony. Typy terenu chwilowo uproszczone, ponowię za 20 s.');
-  }
-  classify(cells, osm);
-  if (osm) S.areas.push([lat, lng]);
+  const created = h3.gridDisk(mid, AREA_K).filter(c => !S.hexes[c]);
+  for (const c of created) S.hexes[c] = { inf: {}, owner: null, b: null, store: 0, type: 'zabudowa', blocked: false, pending: true };
+  S.areas.push([lat, lng]);
   seedBots(created, mid);
-  loading = false;
-  setStatus('');
   save(); render();
+  classifyVisible();
 }
 
-async function fetchOverpass(s, w, n, e) {
-  const bb = [s, w, n, e].map(v => v.toFixed(5)).join(',');
-  const q = `[out:json][timeout:25][bbox:${bb}];
-(way["leisure"~"^(park|garden|nature_reserve|playground|dog_park)$"];
- way["landuse"~"^(forest|grass|meadow|recreation_ground|village_green|allotments)$"];
- way["natural"~"^(wood|scrub|water)$"];
- way["waterway"="riverbank"];);
-out geom;
-(node["shop"];
- node["amenity"~"^(restaurant|cafe|bar|pub|fast_food|pharmacy|bank|marketplace|ice_cream)$"];
- node["tourism"~"^(attraction|museum|viewpoint|artwork|gallery)$"];
- node["historic"];
- node["amenity"~"^(place_of_worship|theatre|library|arts_centre|cinema)$"];
- node["highway"="bus_stop"];
- node["railway"~"^(station|tram_stop|halt|subway_entrance)$"];);
-out;
-(way["highway"~"^(motorway|motorway_link)$"]["tunnel"!="yes"];
- way["railway"="rail"]["tunnel"!="yes"]["bridge"!="yes"];);
-out geom;`;
-  for (const url of ENDPOINTS) {
-    try {
-      const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-      if (r.ok) return await r.json();
-    } catch (err) { /* następny serwer */ }
+const SRC = 'openmaptiles';
+const GREEN_LANDCOVER = /^(grass|wood|farmland|wetland)$/;
+const GREEN_LANDUSE = /^(park|cemetery|grass|recreation_ground|garden|playground|pitch|allotments|village_green)$/;
+const SHOP_POI = /^(shop|grocery|convenience|supermarket|restaurant|cafe|fast_food|bar|pub|beer|ice_cream|bakery|butcher|clothing_store|hairdresser|pharmacy|bank|marketplace|alcohol_shop|jewelry|furniture|hardware|mobile_phone|books|gift|florist|shoes|optician|deli|confectionery|cosmetics|electronics|sports|toys|pet|stationery|wine|department_store|mall|beauty|chemist|kiosk)$/;
+const CULTURE_POI = /^(museum|art_gallery|attraction|monument|memorial|castle|place_of_worship|theatre|library|cinema|historic|archaeological_site|ruins|fort|town_hall|viewpoint|religious|arts_centre)$/;
+const TRANSPORT_POI = /^(bus|railway|tram|subway|ferry_terminal|bus_station|tram_stop|station|halt)$/;
+const WATER = /^(river|lake|pond|basin|reservoir|ocean|sea|water)$/;
+
+function bboxOf(geom) {
+  let w = 180, s = 90, e = -180, n = -90;
+  const walk = a => { if (typeof a[0] === 'number') { w = Math.min(w, a[0]); e = Math.max(e, a[0]); s = Math.min(s, a[1]); n = Math.max(n, a[1]); } else a.forEach(walk); };
+  walk(geom.coordinates);
+  return [w, s, e, n];
+}
+// Punkt w wielokącie GeoJSON (z dziurami), współrzędne [lng, lat].
+function inRings(lng, lat, rings) {
+  let inside = false;
+  rings.forEach((ring, i) => {
+    let hit = false;
+    for (let a = 0, b = ring.length - 1; a < ring.length; b = a++) {
+      const [xa, ya] = ring[a], [xb, yb] = ring[b];
+      if ((ya > lat) !== (yb > lat) && lng < (xb - xa) * (lat - ya) / (yb - ya) + xa) hit = !hit;
+    }
+    if (i === 0) inside = hit; else if (hit) inside = false;
+  });
+  return inside;
+}
+function areas(features) {
+  const out = [];
+  for (const f of features) {
+    const g = f.geometry;
+    if (g.type === 'Polygon') out.push({ bb: bboxOf(g), polys: [g.coordinates] });
+    else if (g.type === 'MultiPolygon') out.push({ bb: bboxOf(g), polys: g.coordinates });
   }
-  throw new Error('overpass');
+  return out;
+}
+function covered(lng, lat, list) {
+  for (const a of list) {
+    if (lng < a.bb[0] || lng > a.bb[2] || lat < a.bb[1] || lat > a.bb[3]) continue;
+    if (a.polys.some(p => inRings(lng, lat, p))) return true;
+  }
+  return false;
+}
+// 7 punktów próbkowania: środek i 6 punktów w połowie drogi do wierzchołków.
+function samples(id) {
+  const [la, ln] = center(id);
+  return [[ln, la], ...boundary(id).slice(0, 6).map(([x, y]) => [ln + (x - ln) * 0.6, la + (y - la) * 0.6])];
 }
 
-const CULTURE = /^(place_of_worship|theatre|library|arts_centre|cinema)$/;
-function classify(cells, osm) {
+function classifyVisible() {
+  if (!mapReady || map.getZoom() < 14) return;
+  const b = map.getBounds();
+  const cells = Object.keys(S.hexes).filter(c => {
+    if (!S.hexes[c].pending) return false;
+    const [la, ln] = center(c);
+    return b.contains([ln, la]);
+  });
+  if (!cells.length) return;
+  const q = l => map.querySourceFeatures(SRC, { sourceLayer: l });
+  const poi = q('poi');
+  if (!map.areTilesLoaded()) return; // kafle jeszcze się wczytują, spróbujemy przy następnym 'idle'
+  const green = areas([
+    ...q('landcover').filter(f => GREEN_LANDCOVER.test(f.properties.class)),
+    ...q('landuse').filter(f => GREEN_LANDUSE.test(f.properties.class)),
+    ...q('park'),
+  ]);
+  const water = areas(q('water').filter(f => WATER.test(f.properties.class || 'water')));
   const cellSet = new Set(cells), score = {}, blocked = new Set();
   const add = (c, t, v) => { if (!cellSet.has(c)) return; (score[c] ??= {})[t] = (score[c][t] || 0) + v; };
-  const centers = cells.map(c => [c, center(c)]);
-  for (const el of (osm?.elements || [])) {
-    const t = el.tags || {};
-    if (el.type === 'node') {
-      const c = h3.latLngToCell(el.lat, el.lon, RES);
-      if (t.highway === 'bus_stop' || t.railway) add(c, 'transport', 2);
-      else if (t.tourism || t.historic || CULTURE.test(t.amenity || '')) add(c, 'kultura', 2);
-      else if (t.shop || t.amenity) add(c, 'handel', 1);
-    } else if (el.type === 'way' && el.geometry) {
-      const g = el.geometry.map(p => [p.lat, p.lon]);
-      if (t.highway || t.railway) { markLine(g, blocked, cellSet); continue; }
-      const closed = g.length > 3 && g[0][0] === g[g.length - 1][0] && g[0][1] === g[g.length - 1][1];
-      if (!closed) continue;
-      const water = t.natural === 'water' || t.waterway === 'riverbank';
-      let s = 90, n = -90, w = 180, e = -180;
-      for (const [a, b] of g) { s = Math.min(s, a); n = Math.max(n, a); w = Math.min(w, b); e = Math.max(e, b); }
-      for (const [c, [la, ln]] of centers) {
-        if (la < s || la > n || ln < w || ln > e || !inPoly(la, ln, g)) continue;
-        if (water) blocked.add(c); else add(c, 'zielen', 3);
-      }
-    }
+  const seen = new Set();
+  for (const f of poi) {
+    if (f.geometry.type !== 'Point') continue;
+    const [ln, la] = f.geometry.coordinates, cls = f.properties.class || '', sub = f.properties.subclass || '';
+    const key = `${cls}/${sub}/${ln.toFixed(5)}/${la.toFixed(5)}`;
+    if (seen.has(key)) continue; // ten sam punkt bywa w kilku kaflach
+    seen.add(key);
+    const c = h3.latLngToCell(la, ln, RES);
+    if (TRANSPORT_POI.test(cls) || /^(bus_stop|tram_stop|station|halt|subway_entrance)$/.test(sub)) add(c, 'transport', 2);
+    else if (CULTURE_POI.test(cls)) add(c, 'kultura', sub === 'artwork' ? 0.5 : 2.5);
+    else if (SHOP_POI.test(cls)) add(c, 'handel', 1);
+  }
+  for (const f of q('transportation')) {
+    const p = f.properties;
+    if (p.brunnel === 'tunnel' || p.brunnel === 'bridge') continue;
+    if (!(p.class === 'motorway' || (p.class === 'rail' && (!p.subclass || p.subclass === 'rail')))) continue;
+    const g = f.geometry, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+    for (const line of lines) markLine(line.map(([x, y]) => [y, x]), blocked, cellSet);
   }
   for (const c of cells) {
+    const pts = samples(c);
+    const g = pts.filter(([x, y]) => covered(x, y, green)).length;
+    if (g >= 3) add(c, 'zielen', 1 + g / 2);
+    const w = pts.filter(([x, y]) => covered(x, y, water)).length;
+    if (w >= 5) blocked.add(c);
     let type = 'zabudowa', best = 1;
     for (const [k, v] of Object.entries(score[c] || {})) if (v > best) { best = v; type = k; }
-    const h = S.hexes[c] || (S.hexes[c] = { inf: {}, owner: null, b: null, store: 0 });
+    const h = S.hexes[c];
     h.type = type;
-    // Strażnik dzikiej ziemi zawsze odpowiada typowi terenu (ważne po ponownym wczytaniu danych OSM).
+    // Strażnik dzikiej ziemi zawsze odpowiada typowi terenu.
     const npc = 'npc:' + type;
     if (NPC[h.owner] && h.owner !== npc) { h.inf[npc] = h.inf[h.owner]; delete h.inf[h.owner]; h.owner = npc; }
     h.blocked = blocked.has(c);
-    h.pending = !osm;
+    h.pending = false;
     if (h.blocked) { h.owner = null; h.inf = {}; h.b = null; }
   }
+  save(); render();
 }
 function markLine(g, blocked, cellSet) {
   for (let i = 1; i < g.length; i++) {
@@ -305,7 +331,7 @@ function tick() {
     updateOwner(id, h, 'decay');
   }
   botActivity(hours);
-  if (S.pos && S.cur && S.hexes[S.cur]?.pending) ensureArea(...S.pos);
+  classifyVisible();
   save(); render();
 }
 
@@ -689,7 +715,7 @@ function renderCard() {
   const own = h.owner ? owner(h.owner) : null;
   const ownLabel = !own ? 'neutralny'
     : `<span class="dot" style="background:${own.color}"></span> ${own.name}${own.lvl ? ` <span class="muted">poz. ${own.lvl}</span>` : ''}${own.npc ? `<br><span class="muted">Dzikie ziemie: ${own.lore}</span>` : ''}`;
-  let html = `<div class="card-title"><span class="dot" style="background:${t.color}"></span>${h.blocked ? 'Teren wyłączony' : t.label}
+  let html = `<div class="card-title"><span class="dot" style="background:${t.color}"></span>${h.blocked ? 'Teren wyłączony' : h.pending ? 'Rozpoznaję teren z mapy…' : t.label}
     <span class="muted">${here ? '· tu jesteś' : '· podgląd'}</span></div>`;
   if (h.blocked) {
     html += '<p class="muted">Woda, tory albo autostrada. Tu nie da się zajmować terenu.</p>';
@@ -820,6 +846,7 @@ function initMap() {
     render();
   });
   map.on('dragstart', () => { followOn = false; });
+  map.on('idle', classifyVisible);
 }
 
 function bindUi() {

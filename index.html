@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1971c2">
+<title>Terra - prototyp</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+<header id="top">
+  <div id="inv"></div>
+  <button id="menuBtn" aria-label="Menu">☰</button>
+</header>
+
+<div id="map"></div>
+<div id="status" hidden></div>
+<button id="recenter" aria-label="Wyśrodkuj na mnie">◎</button>
+
+<section id="sheet">
+  <div id="cargo" hidden></div>
+  <div id="card"></div>
+</section>
+
+<div id="toasts"></div>
+
+<div id="duel" class="overlay" hidden>
+  <div class="duel-head">
+    <div>Twój wynik: <b id="dScore">0</b></div>
+    <div>Garnizon: <b id="dGhost">0</b></div>
+    <div>Czas: <b id="dTime">20</b> s</div>
+  </div>
+  <div id="arena"><button id="target" aria-label="Cel"></button></div>
+  <div id="dIntro" class="duel-intro">
+    <h2>Pojedynek o heks</h2>
+    <p>Trafiaj w cel przez 20 sekund. Pudło odejmuje punkt. Pobij wynik garnizonu obrońcy.</p>
+    <p>Stawka: <b>10 monet</b>. Wygrana daje heks, budynek (o poziom niżej) i połowę magazynu.</p>
+    <button id="dGo" class="btn primary">Start</button>
+    <button id="dCancel" class="btn">Rezygnuję</button>
+  </div>
+</div>
+
+<div id="menu" class="overlay panel" hidden>
+  <div class="panel-inner">
+    <div class="row between"><h2>Menu</h2><button id="menuClose" class="btn">Zamknij</button></div>
+    <h3>Tryb ruchu</h3>
+    <div class="row">
+      <button id="modeGps" class="btn">GPS (spacer)</button>
+      <button id="modeTest" class="btn">Testowy (klikanie)</button>
+    </div>
+    <p class="muted">Tryb testowy: dotknij heks na mapie i wybierz „Idź tutaj”. Ruch liczy się jak spacer.</p>
+    <h3>Statystyki</h3>
+    <div id="stats"></div>
+    <h3>Dziennik</h3>
+    <ol id="log"></ol>
+    <h3>Zasady w skrócie</h3>
+    <ul class="muted rules">
+      <li>Chodząc po heksie budujesz wpływ (1 pkt na 10 m). 10 pkt i przewaga = heks jest Twój.</li>
+      <li>Wpływ zanika o 5% dziennie, rywale naciskają na heksy przy swojej granicy. Wracaj.</li>
+      <li>Twój heks produkuje surowiec swojego typu (z OpenStreetMap). Zbierasz go, wchodząc na heks.</li>
+      <li>Szlak handlowy: zbierz w heksie jednego typu, zanieś do swojego heksu innego typu (min. 300 m, do 60 min).</li>
+      <li>Myto: wejście na cudzy heks kosztuje 2 monety (+2 za każdy poziom Targu), raz na dobę. Przechodnie płacą Tobie.</li>
+      <li>Przejęcie: powoli, chodząc po cudzym heksie, albo szybko pojedynkiem. Budynek przechodzi na zdobywcę o poziom niżej.</li>
+    </ul>
+    <button id="reset" class="btn danger">Zacznij od nowa</button>
+  </div>
+</div>
+
+<div id="start" class="overlay panel" hidden>
+  <div class="panel-inner">
+    <h2>Terra</h2>
+    <p>Zajmuj prawdziwą okolicę, zbieraj surowce z parków, sklepów i zabytków, prowadź karawany i pobieraj myto.</p>
+    <button id="startGps" class="btn primary">Zacznij spacer (GPS)</button>
+    <button id="startTest" class="btn">Tryb testowy (Warszawa)</button>
+    <p class="muted">Prototyp. Postęp zapisuje się tylko na tym urządzeniu. Inni gracze i strażnicy dzikich ziem są na razie symulowani.</p>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+<script src="app.js?v=4"></script>
+</body>
+</html>

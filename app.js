@@ -43,22 +43,34 @@ const TYPES = {
   zabudowa: { label: 'Zabudowa', res: 'monety', color: '#868e96' },
 };
 const RESOURCES = { monety: 'Monety', drewno: 'Drewno', towary: 'Towary', slawa: 'Sława', wozy: 'Wozy' };
+// Budynki: 2 miejsca na heks, poziomy 1-3. Część rodzajów można postawić tylko na pasującym typie terenu.
+const lvl3 = l => (l === 3 ? { slawa: 10 } : {});
 const BUILD = {
-  targ: { label: 'Targ', desc: 'produkcja x(1+poziom), myto +2/poziom',
-    cost: l => ({ monety: 20 * l, towary: 10 * l, ...(l === 3 ? { slawa: 10 } : {}) }) },
-  wieza: { label: 'Wieża', desc: 'wolniejsze przejmowanie, mocniejszy garnizon',
-    cost: l => ({ monety: 20 * l, drewno: 15 * l, ...(l === 3 ? { slawa: 10 } : {}) }) },
-  // Siedziba: dostajesz ją za pierwszy heks. Nie da się jej stracić ani zbudować drugi raz.
-  siedziba: { label: 'Siedziba', desc: '+3 monety/h prosto do skarbca, rywale nie mogą jej przejąć', cost: null },
+  targ: { label: 'Targ', letter: 'T', desc: 'produkcja x(1+poziom), myto +2 za poziom',
+    cost: l => ({ monety: 20 * l, towary: 10 * l, ...lvl3(l) }) },
+  wieza: { label: 'Wieża', letter: 'W', desc: 'przejmowanie wolniejsze 1+poziom razy, garnizon +4 za poziom',
+    cost: l => ({ monety: 20 * l, drewno: 15 * l, ...lvl3(l) }) },
+  magazyn: { label: 'Magazyn', letter: 'M', desc: 'magazyn mieści 24 h x(1+poziom), zdobywca zabiera 25% mniej za poziom',
+    cost: l => ({ monety: 15 * l, drewno: 10 * l, ...lvl3(l) }) },
+  tartak: { label: 'Tartak', letter: 'Tr', only: 'zielen', desc: '+1 drewno/h za poziom',
+    cost: l => ({ monety: 15 * l, drewno: 10 * l, ...lvl3(l) }) },
+  kantor: { label: 'Kantor', letter: 'K', only: 'handel', desc: 'myto +3 za poziom',
+    cost: l => ({ monety: 20 * l, towary: 10 * l, ...lvl3(l) }) },
+  galeria: { label: 'Galeria', letter: 'G', only: 'kultura', desc: '+1 sława/h za poziom, wpływ zanika o połowę wolniej',
+    cost: l => ({ monety: 20 * l, towary: 5 * l, ...lvl3(l) }) },
+  stajnia: { label: 'Stajnia', letter: 'St', only: 'transport', desc: 'szlak zaczynający się lub kończący tu +25% za poziom',
+    cost: l => ({ monety: 15 * l, drewno: 5 * l, wozy: 1 * l, ...lvl3(l) }) },
 };
-const BLD_LETTER = { targ: 'T', wieza: 'W', siedziba: 'S' };
+const SLOTS = 2;
+const SEAT_SHIELD = 7 * DAY;   // Siedziba jest nietykalna tylko przez pierwszy tydzień
+const SEAT_DESC = '+3 monety/h prosto do skarbca, mocniejsza obrona. Gdy ją stracisz, przenosi się na Twój najsilniejszy heks';
 const STARTER = { monety: 60, drewno: 15, towary: 10, slawa: 0, wozy: 2 };
 
 // Pierwsze zadania: prowadzą przez grę i dają nagrody, żeby już po pierwszym spacerze coś mieć.
 const QUESTS = [
   { title: 'Zajmij pierwszy heks', hint: 'Przejdź ok. 50 m po dowolnym heksie. Stanie się Twoją Siedzibą.',
     prog: s => [s.stats.captured, 1], reward: { drewno: 10, towary: 10 } },
-  { title: 'Postaw pierwszy budynek', hint: 'Targ albo Wieża. Możesz to zrobić także później, w domu.',
+  { title: 'Postaw pierwszy budynek', hint: 'Dotknij swojego heksu i wybierz budynek. Możesz to zrobić także później, w domu.',
     prog: s => [s.stats.built, 1], reward: { monety: 30 } },
   { title: 'Zajmij 5 heksów', hint: 'Idź przed siebie: każde ok. 50 m to nowy heks.',
     prog: s => [s.stats.captured, 5], reward: { monety: 20, drewno: 15, towary: 10 } },
@@ -77,7 +89,7 @@ function fresh() {
     inv: { ...STARTER },
     hexes: {}, areas: [], cargo: null, bots: {},
     stats: { meters: 0, captured: 0, routes: 0, routeIncome: 0, tollPaid: 0, tollEarned: 0, duelsWon: 0, duelsLost: 0, built: 0 },
-    lastTick: Date.now(), log: [], tune: 4,
+    lastTick: Date.now(), log: [], tune: 5, seat: null, seatShield: 0,
     settings: { vibe: true, voice: false }, q: 0, tasks: [], lastLost: null,
   };
 }
@@ -107,6 +119,15 @@ if (S.tune < 4) {
   if (mine.length && !mine.some(h => h.b?.t === 'siedziba')) mine[0].b = { t: 'siedziba', l: 1 };
   S.log.unshift({ t: Date.now(), msg: 'Pakiet startowy: surowce na pierwszy budynek' + (mine.length ? ', a Twój najmocniejszy heks jest teraz Siedzibą' : '') });
   S.tune = 4;
+}
+// Migracja na 2 miejsca budowy i Siedzibę jako oznaczenie heksu (z tygodniową ochroną).
+if (S.tune < 5) {
+  for (const [id, h] of Object.entries(S.hexes)) {
+    if (h.b?.t === 'siedziba') { S.seat = id; S.seatShield = Date.now() + SEAT_SHIELD; }
+    h.bs = h.b && h.b.t !== 'siedziba' ? [h.b] : [];
+    delete h.b;
+  }
+  S.tune = 5;
 }
 let saveTimer = null;
 function save() {
@@ -143,7 +164,7 @@ function ensureArea(lat, lng) {
   if (S.areas.some(a => dist(a, [lat, lng]) < 700)) return;
   const mid = h3.latLngToCell(lat, lng, RES);
   const created = h3.gridDisk(mid, AREA_K).filter(c => !S.hexes[c]);
-  for (const c of created) S.hexes[c] = { inf: {}, owner: null, b: null, store: 0, type: 'zabudowa', blocked: false, pending: true };
+  for (const c of created) S.hexes[c] = { inf: {}, owner: null, bs: [], store: 0, type: 'zabudowa', blocked: false, pending: true };
   S.areas.push([lat, lng]);
   seedBots(created, mid);
   save(); render();
@@ -253,7 +274,7 @@ function classifyVisible() {
     if (NPC[h.owner] && h.owner !== npc) { h.inf[npc] = h.inf[h.owner]; delete h.inf[h.owner]; h.owner = npc; }
     h.blocked = blocked.has(c);
     h.pending = false;
-    if (h.blocked) { h.owner = null; h.inf = {}; h.b = null; }
+    if (h.blocked) { h.owner = null; h.inf = {}; h.bs = []; }
   }
   save(); render();
 }
@@ -303,19 +324,24 @@ function seedBots(created, mid) {
       h.inf = { [bot]: 15 + Math.random() * 25 };
       h.owner = bot;
       h.store = Math.random() * 10;
-      if (Math.random() < 0.25) h.b = { t: Math.random() < 0.5 ? 'targ' : 'wieza', l: Math.random() < 0.3 ? 2 : 1 };
+      if (Math.random() < 0.25) h.bs = [{ t: Math.random() < 0.5 ? 'targ' : 'wieza', l: Math.random() < 0.3 ? 2 : 1 }];
     }
   }
 }
 
 // ---------- Ekonomia ----------
 const resOf = h => TYPES[h.type || 'zabudowa'].res;
-const lvl = (h, t) => (h.b && h.b.t === t ? h.b.l : 0);
+const lvl = (h, t) => (h.bs || []).find(b => b.t === t)?.l || 0;
+const seatActive = () => !!S.seat && S.hexes[S.seat]?.owner === ME;
+const isSeat = h => !!S.seat && S.hexes[S.seat] === h;
+const seatShielded = h => isSeat(h) && Date.now() < (S.seatShield || 0);
+const defense = h => 1 + lvl(h, 'wieza') + (isSeat(h) ? 2 : 0);
 const boosted = h => Date.now() < (h.boost || 0);
-const prodRate = h => (h.type === 'zabudowa' ? 1 : 2) * (1 + lvl(h, 'targ')) * (boosted(h) ? 2 : 1);
-const isSeat = h => h.b?.t === 'siedziba';
-const tollOf = h => 2 + 2 * lvl(h, 'targ');
-const garrison = h => (NPC[h.owner] ? 8 : 12) +4 * lvl(h, 'wieza') + Math.floor(Math.random() * 5);
+const prodRate = h => ((h.type === 'zabudowa' ? 1 : 2) + lvl(h, 'tartak') + lvl(h, 'galeria')) * (1 + lvl(h, 'targ')) * (boosted(h) ? 2 : 1);
+const storeCap = h => prodRate(h) * 24 * (1 + lvl(h, 'magazyn'));
+const tollOf = h => 2 + 2 * lvl(h, 'targ') + 3 * lvl(h, 'kantor');
+const garrison = h => (NPC[h.owner] ? 8 : 12) + 4 * lvl(h, 'wieza') + (isSeat(h) ? 8 : 0) + Math.floor(Math.random() * 5);
+const bldText = h => (h.bs || []).map(b => `${BUILD[b.t].label} ${b.l}`).join(', ');
 const afford = cost => Object.entries(cost).every(([k, v]) => S.inv[k] >= v);
 const costText = cost => Object.entries(cost).map(([k, v]) => `${v} ${RESOURCES[k].toLowerCase()}`).join(', ');
 
@@ -333,12 +359,13 @@ function updateOwner(id, h, cause) {
 function changeOwner(id, h, from, to, cause) {
   const now = Date.now();
   let buildingNote = '';
-  if (h.b) {
-    h.b.l -= 1;
-    if (h.b.l <= 0) { buildingNote = `, ${BUILD[h.b.t].label} zburzony`; h.b = null; }
-    else buildingNote = `, przejęty budynek: ${BUILD[h.b.t].label} poz. ${h.b.l}`;
+  if (h.bs?.length) {
+    for (const b of h.bs) b.l -= 1;
+    const gone = h.bs.filter(b => b.l <= 0).map(b => BUILD[b.t].label);
+    h.bs = h.bs.filter(b => b.l > 0);
+    buildingNote = (h.bs.length ? `, przejęte budynki: ${bldText(h)}` : '') + (gone.length ? `, zburzone: ${gone.join(', ')}` : '');
   }
-  const loot = Math.floor(h.store || 0);
+  const loot = Math.floor((h.store || 0) * Math.max(0, 1 - 0.25 * lvl(h, 'magazyn')));
   h.store = 0;
   h.owner = to;
   h.protect = to ? now + PROTECT : 0;
@@ -347,9 +374,10 @@ function changeOwner(id, h, from, to, cause) {
     S.stats.captured++;
     walk.captured++;
     const label = TYPES[h.type].label;
-    if (!Object.values(S.hexes).some(isSeat)) {
-      h.b = { t: 'siedziba', l: 1 };
-      buildingNote = ', to Twoja Siedziba: +3 monety/h i nikt Ci jej nie odbierze';
+    if (!seatActive()) {
+      S.seat = id;
+      if (!S.seatShield) S.seatShield = now + SEAT_SHIELD;
+      buildingNote = `, to Twoja Siedziba${now < S.seatShield ? ` (nietykalna do ${fmtDay(S.seatShield)})` : ''}`;
       flash('Twoja Siedziba!', label);
     } else flash('Heks zdobyty!', label);
     buzz('capture');
@@ -359,6 +387,7 @@ function changeOwner(id, h, from, to, cause) {
     maybeTask(id, h);
     if (id === S.cur) route(id, h, now);
   } else if (from === ME) {
+    if (S.seat === id) relocateSeat();
     const d = direction(id);
     const where = d ? `: ${d.arrow} ${d.m} m, ${d.name}` : '';
     S.lastLost = { id, t: now };
@@ -367,6 +396,17 @@ function changeOwner(id, h, from, to, cause) {
     log(`Heks utracony${to ? ', przejmuje go ' + owner(to).name : ', wpływ wygasł'}${where}${buildingNote}`, true);
   }
 }
+
+// Siedziba po utracie przenosi się na Twój najsilniejszy heks (bez nowej ochrony), a gdy nie masz żadnego, upada.
+function relocateSeat() {
+  const old = S.seat;
+  const next = Object.keys(S.hexes).filter(k => k !== old && S.hexes[k].owner === ME)
+    .sort((a, b) => (S.hexes[b].inf[ME] || 0) - (S.hexes[a].inf[ME] || 0))[0];
+  S.seat = next || null;
+  if (next) log(`Siedziba przeniesiona na Twój najsilniejszy heks (${TYPES[S.hexes[next].type].label})`, true);
+  else log('Siedziba upadła. Następny zdobyty heks stanie się nową Siedzibą.', true);
+}
+const fmtDay = t => new Date(t).toLocaleString('pl-PL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 // ---------- Kierunek ----------
 const DIRS = [['↑', 'północ'], ['↗', 'północny wschód'], ['→', 'wschód'], ['↘', 'południowy wschód'],
@@ -461,9 +501,10 @@ function tick() {
   const hours = dt / H, f = Math.pow(DECAY_PER_DAY, dt / DAY);
   for (const [id, h] of Object.entries(S.hexes)) {
     if (h.blocked) continue;
-    for (const k in h.inf) { h.inf[k] *= f; if (h.inf[k] < 0.5) delete h.inf[k]; }
-    if (isSeat(h) && h.owner === ME) { h.inf[ME] = Math.max(h.inf[ME] || 0, 30); S.inv.monety += 3 * hours; }
-    if (h.owner) h.store = Math.min(prodRate(h) * 24, (h.store || 0) + prodRate(h) * hours);
+    const fh = lvl(h, 'galeria') ? Math.sqrt(f) : f;
+    for (const k in h.inf) { h.inf[k] *= fh; if (h.inf[k] < 0.5) delete h.inf[k]; }
+    if (isSeat(h) && h.owner === ME) { if (seatShielded(h)) h.inf[ME] = Math.max(h.inf[ME] || 0, 30); S.inv.monety += 3 * hours; }
+    if (h.owner) h.store = Math.min(storeCap(h), (h.store || 0) + prodRate(h) * hours);
     updateOwner(id, h, 'decay');
   }
   botActivity(hours);
@@ -487,10 +528,10 @@ function botActivity(hours) {
     // Przechodnie płacą myto na Twoich heksach.
     if (Math.random() < 1 - Math.exp(-0.15 * h0)) { const t = tollOf(h); S.inv.monety += t; S.stats.tollEarned += t; tollIn += t; }
     // Rywale naciskają na heksy przy swojej granicy (poza Siedzibą).
-    if (now < (h.protect || 0) || isSeat(h)) continue;
+    if (now < (h.protect || 0) || seatShielded(h)) continue;
     const enemy = neighborBot(id);
     if (!enemy) continue;
-    const g = 0.6 * h0 / (1 + lvl(h, 'wieza'));
+    const g = 0.6 * h0 / defense(h);
     h.inf[ME] = Math.max(0, (h.inf[ME] || 0) - g);
     h.inf[enemy] = (h.inf[enemy] || 0) + g;
     const before = h.owner;
@@ -583,10 +624,10 @@ function renderWalkers() {
 function botGain(id, h, bot, g) {
   if (h.owner === bot) { h.inf[bot] = Math.min(MAX_INF, (h.inf[bot] || 0) + g); return; }
   if (h.owner && Date.now() < (h.protect || 0)) return;
-  if (h.owner === ME && isSeat(h)) return;
+  if (h.owner === ME && seatShielded(h)) return;
   // Na Twoim terenie boty wypierają wolniej, żeby nacisk był odczuwalny, ale nie przytłaczający.
   const k = h.owner === ME ? 0.5 : 1;
-  if (h.owner) h.inf[h.owner] = Math.max(0, (h.inf[h.owner] || 0) - k * g / (1 + lvl(h, 'wieza')));
+  if (h.owner) h.inf[h.owner] = Math.max(0, (h.inf[h.owner] || 0) - k * g / defense(h));
   h.inf[bot] = Math.min(MAX_INF, (h.inf[bot] || 0) + k * g);
   const before = h.owner;
   updateOwner(id, h, 'bot');
@@ -619,7 +660,7 @@ function metersToCapture(h) {
   const mine = h.inf[ME] || 0;
   let pts = Math.max(0, CAPTURE - mine);
   if (h.owner && h.owner !== ME) {
-    const other = h.inf[h.owner] || 0, k = 1 + 1 / (1 + lvl(h, 'wieza'));
+    const other = h.inf[h.owner] || 0, k = 1 + 1 / defense(h);
     pts = Math.max(pts, (other - mine) / k + 0.5);
   }
   return Math.max(5, Math.ceil(pts * M_PER_POINT / 5) * 5);
@@ -628,7 +669,7 @@ function metersToCapture(h) {
 function gain(id, h, g) {
   if (h.owner && h.owner !== ME) {
     if (Date.now() < (h.protect || 0)) return;
-    h.inf[h.owner] = Math.max(0, (h.inf[h.owner] || 0) - g / (1 + lvl(h, 'wieza')));
+    h.inf[h.owner] = Math.max(0, (h.inf[h.owner] || 0) - g / defense(h));
   }
   h.inf[ME] = Math.min(MAX_INF, (h.inf[ME] || 0) + g);
   updateOwner(id, h, 'walk');
@@ -670,7 +711,8 @@ function route(id, h, now) {
   if (c && now - c.since <= ROUTE_MAX_AGE && c.res !== res) {
     const straight = dist(center(c.from), center(id));
     if (straight >= ROUTE_MIN_DIST) {
-      let pay = Math.round(c.m / 1000 * 30 + straight / 1000 * 20), bonus = '';
+      const stable = lvl(S.hexes[c.from] || {}, 'stajnia') + lvl(h, 'stajnia');
+      let pay = Math.round((c.m / 1000 * 30 + straight / 1000 * 20) * (1 + 0.25 * stable)), bonus = stable ? ` (stajnia +${25 * stable}%)` : '';
       if (S.inv.wozy >= 1) { S.inv.wozy--; pay = Math.round(pay * 1.5); bonus = ' (wóz x1,5)'; }
       S.inv.monety += pay; S.stats.routes++; S.stats.routeIncome += pay;
       log(`Szlak handlowy ${RESOURCES[c.res]} → ${RESOURCES[res]}: ${Math.round(c.m)} m, +${pay} monet${bonus}`, false);
@@ -763,15 +805,21 @@ function teleport(lat, lng) {
 
 // ---------- Budowa ----------
 // Budować można na każdym swoim heksie, także z domu.
+function canBuild(h, t) {
+  const B = BUILD[t];
+  if (!h || h.owner !== ME || !B || (B.only && B.only !== h.type)) return null;
+  const ex = (h.bs || []).find(b => b.t === t);
+  if (!ex && (h.bs || []).length >= SLOTS) return null;
+  const l = (ex ? ex.l : 0) + 1;
+  return l > 3 ? null : { l, ex, cost: B.cost(l) };
+}
 function build(t, id) {
-  const h = S.hexes[id];
-  if (!h || h.owner !== ME || !BUILD[t].cost || (h.b && h.b.t !== t)) return;
-  const l = (h.b ? h.b.l : 0) + 1;
-  if (l > 3) return;
-  const cost = BUILD[t].cost(l);
-  if (!afford(cost)) { toast('Brakuje surowców: ' + costText(cost)); return; }
-  for (const [k, v] of Object.entries(cost)) S.inv[k] -= v;
-  h.b = { t, l };
+  const h = S.hexes[id], c = canBuild(h, t);
+  if (!c) return;
+  if (!afford(c.cost)) { toast('Brakuje surowców: ' + costText(c.cost)); return; }
+  for (const [k, v] of Object.entries(c.cost)) S.inv[k] -= v;
+  const l = c.l;
+  if (c.ex) c.ex.l = l; else (h.bs ??= []).push({ t, l });
   S.stats.built++;
   buzz('capture');
   flash(`${BUILD[t].label} poz. ${l}`, 'zbudowano');
@@ -884,7 +932,8 @@ function renderCard() {
     html += `<dl class="kv">
       <dt>Właściciel</dt><dd>${ownLabel}</dd>
       <dt>Produkuje</dt><dd>${prodRate(h)}/h ${RESOURCES[t.res].toLowerCase()}${h.owner ? `, w magazynie ${Math.floor(h.store || 0)}` : ' (gdy ma właściciela)'}</dd>
-      <dt>Budynek</dt><dd>${h.b ? `${BUILD[h.b.t].label} poz. ${h.b.l}` : 'brak'}</dd>
+      <dt>Budynki</dt><dd>${bldText(h) || 'brak'} <span class="muted">(${(h.bs || []).length}/${SLOTS} miejsc)</span></dd>
+      ${isSeat(h) ? `<dt>Siedziba</dt><dd>${seatShielded(h) ? `nietykalna do ${fmtDay(S.seatShield)}` : 'bez ochrony, broni się mocniej'}</dd>` : ''}
       <dt>Myto</dt><dd>${h.owner && !own.npc ? tollOf(h) + ' monet' : 'brak'}</dd>
       ${now < (h.protect || 0) ? `<dt>Ochrona</dt><dd>do ${fmtTime(h.protect)}</dd>` : ''}
       <dt>Wpływ</dt><dd>${infRows(h)}</dd>
@@ -905,22 +954,22 @@ function renderCard() {
   const acts = [];
   if (!here && S.mode === 'test' && !h.blocked) acts.push('<button class="btn primary" data-act="walk">Idź tutaj</button>');
   if (h.owner === ME) {
+    const rows = [];
     for (const [k, b] of Object.entries(BUILD)) {
-      if (!b.cost || (h.b && h.b.t !== k)) continue;
-      const l = (h.b ? h.b.l : 0) + 1;
-      if (l > 3) continue;
-      const cost = b.cost(l);
-      acts.push(`<button class="btn" data-act="build" data-t="${k}" ${afford(cost) ? '' : 'disabled'} title="${b.desc}">
-        ${h.b ? 'Ulepsz' : 'Zbuduj'} ${b.label} ${l} (${costText(cost)})</button>`);
+      const c = canBuild(h, k);
+      if (!c) continue;
+      rows.push(`<div class="brow"><div><b>${c.ex ? 'Ulepsz' : 'Zbuduj'}: ${b.label} ${c.l}</b><span class="muted">${b.desc}${b.only ? ` (tylko ${TYPES[b.only].label.toLowerCase()})` : ''}</span></div>
+        <button class="btn" data-act="build" data-t="${k}" ${afford(c.cost) ? '' : 'disabled'}>${costText(c.cost)}</button></div>`);
     }
+    if (rows.length) html += `<h4 class="bhead">Budowa <span class="muted">(możesz też z domu)</span></h4><div class="blist">${rows.join('')}</div>`;
+    else html += '<p class="muted">Oba miejsca zajęte, a budynki mają maksymalny poziom.</p>';
     if (!here && Math.floor((h.store || 0) / 2) >= 1) acts.push(`<button class="btn" data-act="collect">Zbierz zdalnie ${Math.floor(h.store / 2)} (połowa)</button>`);
   }
   if (canDuel(id, h)) {
     acts.push(`<button class="btn primary" data-act="duel">Wyzwij na pojedynek (stawka ${DUEL_STAKE})</button>`);
   }
   if (!here) acts.push('<button class="btn" data-act="back">Pokaż mój heks</button>');
-  if (h.owner === ME && isSeat(h)) html += `<p class="muted">Siedziba: ${BUILD.siedziba.desc}.</p>`;
-  else if (h.owner === ME) html += `<p class="muted">Budować możesz też z domu. Targ: ${BUILD.targ.desc}. Wieża: ${BUILD.wieza.desc}.</p>`;
+  if (h.owner === ME && isSeat(h)) html += `<p class="muted">Siedziba: ${SEAT_DESC}.</p>`;
   if (here && h.owner && h.owner !== ME) html += '<p class="muted">Chodząc tu, powoli wypierasz właściciela. Przejście daje też zwiad: przez 12 h wyzwiesz ten heks na pojedynek nawet z domu.</p>';
   if (!here && h.owner && h.owner !== ME && !canDuel(id, h)) html += '<p class="muted">Przejdź przez ten heks, żeby zdobyć zwiad i móc go wyzwać.</p>';
   // Podmieniamy kartę tylko przy zmianie treści, żeby przycisk nie znikał spod palca.
@@ -1014,9 +1063,10 @@ function renderMap() {
     else if (h.type !== 'zabudowa') { fill = t.color; op = 0.14; }
     hexes.push({ type: 'Feature', properties: { id, fill, op, line: h.blocked ? '#495057' : t.color, w: h.owner === ME ? 2.4 : 0.7 },
       geometry: { type: 'Polygon', coordinates: [boundary(id)] } });
-    if (h.b) {
+    if (h.bs?.length || isSeat(h)) {
       const [la, ln] = center(id);
-      buildings.push({ type: 'Feature', properties: { label: BLD_LETTER[h.b.t] + (isSeat(h) ? '' : h.b.l), color: h.owner ? owner(h.owner).color : '#495057' },
+      const label = [isSeat(h) ? 'S' : '', ...(h.bs || []).map(b => BUILD[b.t].letter + b.l)].filter(Boolean).join(' ');
+      buildings.push({ type: 'Feature', properties: { label, color: h.owner ? owner(h.owner).color : '#495057' },
         geometry: { type: 'Point', coordinates: [ln, la] } });
     }
   }
@@ -1058,8 +1108,8 @@ function initMap() {
     map.addLayer({ id: 'hex-lost', type: 'line', source: 'hexes', filter: ['==', ['get', 'id'], ''], paint: { 'line-color': '#e03131', 'line-width': 4, 'line-dasharray': [1.5, 1] } });
     map.addLayer({ id: 'hex-sel', type: 'line', source: 'hexes', filter: ['==', ['get', 'id'], ''], paint: { 'line-color': '#111', 'line-width': 3 } });
     map.addLayer({ id: 'cargo-line', type: 'line', source: 'cargo', paint: { 'line-color': '#e67700', 'line-width': 3, 'line-dasharray': [2, 2] } });
-    map.addLayer({ id: 'bld', type: 'circle', source: 'buildings', paint: { 'circle-radius': 10, 'circle-color': '#fff', 'circle-stroke-width': 3, 'circle-stroke-color': ['get', 'color'] } });
-    map.addLayer({ id: 'bld-label', type: 'symbol', source: 'buildings', layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Bold'], 'text-size': 11, 'text-allow-overlap': true } });
+    map.addLayer({ id: 'bld-label', type: 'symbol', source: 'buildings', layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Bold'], 'text-size': 12, 'text-allow-overlap': true },
+      paint: { 'text-color': ['get', 'color'], 'text-halo-color': '#fff', 'text-halo-width': 2.5 } });
     map.addLayer({ id: 'walker-line', type: 'line', source: 'walkers', paint: { 'line-color': ['get', 'color'], 'line-width': 2.5, 'line-opacity': 0.75, 'line-dasharray': [1, 1.5] } });
     map.addLayer({ id: 'walker-dot', type: 'circle', source: 'walker-heads', paint: { 'circle-radius': 6, 'circle-color': ['get', 'color'], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
     map.addLayer({ id: 'walker-label', type: 'symbol', source: 'walker-heads', layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-offset': [0, 1.3], 'text-anchor': 'top' },

@@ -1,6 +1,6 @@
 // Minimal service worker: network first, cached app shell as offline fallback.
-const CACHE = 'terra-v8';
-const SHELL = ['./', 'index.html', 'style.css?v=8', 'app.js?v=8', 'icon.svg', 'manifest.webmanifest'];
+const CACHE = 'terra-v9';
+const SHELL = ['./', 'index.html', 'style.css?v=9', 'app.js?v=9', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -33,8 +33,6 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
-
       - name: Zależności i synchronizacja Capacitora
         run: |
           npm ci

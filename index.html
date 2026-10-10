@@ -8,13 +8,17 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 <header id="top">
   <div id="inv"></div>
+  <button id="pocketBtn" aria-label="Tryb kieszonkowy" title="Tryb kieszonkowy">⏾</button>
   <button id="menuBtn" aria-label="Menu">☰</button>
 </header>
+<div id="chips"></div>
+<div id="flash" hidden></div>
+<input id="photoInput" type="file" accept="image/*" hidden>
 
 <div id="map"></div>
 <div id="status" hidden></div>
@@ -53,6 +57,9 @@
       <button id="modeTest" class="btn">Testowy (klikanie)</button>
     </div>
     <p class="muted">Tryb testowy: dotknij heks na mapie i wybierz „Idź tutaj”. Ruch liczy się jak spacer.</p>
+    <h3>Powiadomienia</h3>
+    <label class="row"><input type="checkbox" id="setVibe"> Wibracje (zdobycie, utrata, myto, szlak)</label>
+    <label class="row"><input type="checkbox" id="setVoice"> Komunikaty głosowe (do słuchawek)</label>
     <h3>Diagnostyka GPS</h3>
     <div id="diag"></div>
     <h3>Statystyki</h3>
@@ -72,6 +79,17 @@
   </div>
 </div>
 
+<div id="pocket" class="overlay" hidden>
+  <div class="pocket-inner">
+    <div class="muted" id="pGps"></div>
+    <h2>Telefon może iść do kieszeni</h2>
+    <div id="pStats"></div>
+    <div id="pQuest"></div>
+    <ol id="pEvents"></ol>
+    <p class="muted">Ekran nie zgaśnie, żeby GPS działał. O zdobyczy i utracie terenu poinformuje wibracja (oraz głos, jeśli go włączysz w menu). Dotknij dwa razy, żeby wrócić do mapy.</p>
+  </div>
+</div>
+
 <div id="start" class="overlay panel" hidden>
   <div class="panel-inner">
     <h2>Terra</h2>
@@ -84,6 +102,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

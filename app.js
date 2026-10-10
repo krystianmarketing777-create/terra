@@ -48,16 +48,37 @@ const BUILD = {
     cost: l => ({ monety: 20 * l, towary: 10 * l, ...(l === 3 ? { slawa: 10 } : {}) }) },
   wieza: { label: 'Wieża', desc: 'wolniejsze przejmowanie, mocniejszy garnizon',
     cost: l => ({ monety: 20 * l, drewno: 15 * l, ...(l === 3 ? { slawa: 10 } : {}) }) },
+  // Siedziba: dostajesz ją za pierwszy heks. Nie da się jej stracić ani zbudować drugi raz.
+  siedziba: { label: 'Siedziba', desc: '+3 monety/h prosto do skarbca, rywale nie mogą jej przejąć', cost: null },
 };
+const BLD_LETTER = { targ: 'T', wieza: 'W', siedziba: 'S' };
+const STARTER = { monety: 60, drewno: 15, towary: 10, slawa: 0, wozy: 2 };
+
+// Pierwsze zadania: prowadzą przez grę i dają nagrody, żeby już po pierwszym spacerze coś mieć.
+const QUESTS = [
+  { title: 'Zajmij pierwszy heks', hint: 'Przejdź ok. 50 m po dowolnym heksie. Stanie się Twoją Siedzibą.',
+    prog: s => [s.stats.captured, 1], reward: { drewno: 10, towary: 10 } },
+  { title: 'Postaw pierwszy budynek', hint: 'Targ albo Wieża. Możesz to zrobić także później, w domu.',
+    prog: s => [s.stats.built, 1], reward: { monety: 30 } },
+  { title: 'Zajmij 5 heksów', hint: 'Idź przed siebie: każde ok. 50 m to nowy heks.',
+    prog: s => [s.stats.captured, 5], reward: { monety: 20, drewno: 15, towary: 10 } },
+  { title: 'Poprowadź szlak handlowy', hint: 'Z Twojego heksu jednego typu do Twojego heksu innego typu, min. 300 m.',
+    prog: s => [s.stats.routes, 1], reward: { wozy: 3, monety: 20 } },
+  { title: 'Wygraj pojedynek', hint: 'Przejdź przez cudzy heks (zwiad), a wyzwanie rozegrasz nawet z domu.',
+    prog: s => [s.stats.duelsWon, 1], reward: { slawa: 10, monety: 20 } },
+  { title: 'Zajmij 15 heksów', hint: 'Większe imperium to więcej surowców i myta.',
+    prog: s => [s.stats.captured, 15], reward: { monety: 50, slawa: 10 } },
+];
 
 // ---------- Stan ----------
 function fresh() {
   return {
     v: 1, mode: null, pos: null, cur: null,
-    inv: { monety: 30, drewno: 0, towary: 0, slawa: 0, wozy: 0 },
+    inv: { ...STARTER },
     hexes: {}, areas: [], cargo: null, bots: {},
-    stats: { meters: 0, captured: 0, routes: 0, routeIncome: 0, tollPaid: 0, tollEarned: 0, duelsWon: 0, duelsLost: 0 },
-    lastTick: Date.now(), log: [],
+    stats: { meters: 0, captured: 0, routes: 0, routeIncome: 0, tollPaid: 0, tollEarned: 0, duelsWon: 0, duelsLost: 0, built: 0 },
+    lastTick: Date.now(), log: [], tune: 4,
+    settings: { vibe: true, voice: false }, q: 0, tasks: [], lastLost: null,
   };
 }
 function load() {
@@ -76,6 +97,16 @@ if (!S.tune) {
 if (S.tune < 3) {
   for (const h of Object.values(S.hexes)) h.pending = true;
   S.tune = 3;
+}
+// Migracja na zadania, Siedzibę i pakiet startowy (gracze z pierwszych testów też go dostają).
+if (S.tune < 4) {
+  S.settings ??= { vibe: true, voice: false };
+  S.q ??= 0; S.tasks ??= []; S.lastLost ??= null; S.stats.built ??= 0;
+  for (const [k, v] of Object.entries(STARTER)) S.inv[k] = (S.inv[k] || 0) + v;
+  const mine = Object.values(S.hexes).filter(h => h.owner === 'ty').sort((a, b) => (b.inf.ty || 0) - (a.inf.ty || 0));
+  if (mine.length && !mine.some(h => h.b?.t === 'siedziba')) mine[0].b = { t: 'siedziba', l: 1 };
+  S.log.unshift({ t: Date.now(), msg: 'Pakiet startowy: surowce na pierwszy budynek' + (mine.length ? ', a Twój najmocniejszy heks jest teraz Siedzibą' : '') });
+  S.tune = 4;
 }
 let saveTimer = null;
 function save() {
@@ -280,7 +311,9 @@ function seedBots(created, mid) {
 // ---------- Ekonomia ----------
 const resOf = h => TYPES[h.type || 'zabudowa'].res;
 const lvl = (h, t) => (h.b && h.b.t === t ? h.b.l : 0);
-const prodRate = h => (h.type === 'zabudowa' ? 1 : 2) * (1 + lvl(h, 'targ'));
+const boosted = h => Date.now() < (h.boost || 0);
+const prodRate = h => (h.type === 'zabudowa' ? 1 : 2) * (1 + lvl(h, 'targ')) * (boosted(h) ? 2 : 1);
+const isSeat = h => h.b?.t === 'siedziba';
 const tollOf = h => 2 + 2 * lvl(h, 'targ');
 const garrison = h => (NPC[h.owner] ? 8 : 12) +4 * lvl(h, 'wieza') + Math.floor(Math.random() * 5);
 const afford = cost => Object.entries(cost).every(([k, v]) => S.inv[k] >= v);
@@ -312,11 +345,113 @@ function changeOwner(id, h, from, to, cause) {
   if (to === ME) {
     S.inv[resOf(h)] += loot;
     S.stats.captured++;
-    log(`Heks zdobyty (${TYPES[h.type].label})${loot ? `, łup +${loot} ${RESOURCES[resOf(h)].toLowerCase()}` : ''}${buildingNote}`);
+    walk.captured++;
+    const label = TYPES[h.type].label;
+    if (!Object.values(S.hexes).some(isSeat)) {
+      h.b = { t: 'siedziba', l: 1 };
+      buildingNote = ', to Twoja Siedziba: +3 monety/h i nikt Ci jej nie odbierze';
+      flash('Twoja Siedziba!', label);
+    } else flash('Heks zdobyty!', label);
+    buzz('capture');
+    say(`Heks zdobyty. ${label}.`);
+    log(`Heks zdobyty (${label})${loot ? `, łup +${loot} ${RESOURCES[resOf(h)].toLowerCase()}` : ''}${buildingNote}`);
+    if (S.lastLost?.id === id) S.lastLost = null;
+    maybeTask(id, h);
     if (id === S.cur) route(id, h, now);
   } else if (from === ME) {
-    log(`Heks utracony: ${to ? 'przejmuje go ' + owner(to).name : 'opuszczony, wpływ wygasł'}${buildingNote}`, cause !== 'walk');
+    const d = direction(id);
+    const where = d ? `: ${d.arrow} ${d.m} m, ${d.name}` : '';
+    S.lastLost = { id, t: now };
+    buzz('lost');
+    say(`Utracono heks${to ? ' na rzecz ' + owner(to).name : ''}. ${d ? d.m + ' metrów, ' + d.name : ''}.`);
+    log(`Heks utracony${to ? ', przejmuje go ' + owner(to).name : ', wpływ wygasł'}${where}${buildingNote}`, true);
   }
+}
+
+// ---------- Kierunek ----------
+const DIRS = [['↑', 'północ'], ['↗', 'północny wschód'], ['→', 'wschód'], ['↘', 'południowy wschód'],
+  ['↓', 'południe'], ['↙', 'południowy zachód'], ['←', 'zachód'], ['↖', 'północny zachód']];
+function bearing(a, b) {
+  const r = Math.PI / 180, dl = (b[1] - a[1]) * r;
+  const y = Math.sin(dl) * Math.cos(b[0] * r);
+  const x = Math.cos(a[0] * r) * Math.sin(b[0] * r) - Math.sin(a[0] * r) * Math.cos(b[0] * r) * Math.cos(dl);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+function direction(id) {
+  if (!S.pos) return null;
+  const c = center(id), [arrow, name] = DIRS[Math.round(bearing(S.pos, c) / 45) % 8];
+  return { arrow, name, m: Math.round(dist(S.pos, c) / 10) * 10 };
+}
+
+// ---------- Odczucia: wibracja, głos, błysk ----------
+const BUZZ = { capture: [70, 50, 70, 50, 160], lost: [450, 120, 450], toll: [35], route: [100, 60, 100, 60, 100], quest: [60, 40, 60, 40, 60, 40, 250], task: [40, 40, 40] };
+function buzz(kind) {
+  if (!S.settings?.vibe) return;
+  try { navigator.vibrate?.(BUZZ[kind]); } catch (e) { /* brak wibracji */ }
+}
+function say(text) {
+  if (!S.settings?.voice || !window.speechSynthesis) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'pl-PL';
+  speechSynthesis.speak(u);
+}
+let flashTimer = null;
+function flash(title, sub) {
+  const el = $('flash');
+  el.innerHTML = `<b>${title}</b>${sub ? `<span>${sub}</span>` : ''}`;
+  el.hidden = false;
+  el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { el.hidden = true; }, 1800);
+  pocketEvent(title + (sub ? ' · ' + sub : ''));
+}
+
+// ---------- Zadania ----------
+function checkQuests() {
+  let q = QUESTS[S.q];
+  while (q) {
+    const [have, need] = q.prog(S);
+    if (have < need) break;
+    for (const [k, v] of Object.entries(q.reward)) S.inv[k] = (S.inv[k] || 0) + v;
+    S.q++;
+    buzz('quest');
+    flash('Zadanie wykonane!', q.title);
+    say(`Zadanie wykonane: ${q.title}.`);
+    log(`Zadanie wykonane: ${q.title}. Nagroda: ${costText(q.reward)}`, false);
+    q = QUESTS[S.q];
+  }
+}
+
+// Zadania dodatkowe: zdjęcie miejsca i udostępnienie. Nieobowiązkowe, ważne 24 h, można je zrobić w domu.
+function maybeTask(id, h) {
+  const now = Date.now();
+  S.tasks = (S.tasks || []).filter(t => now < t.until && S.hexes[t.id]?.owner === ME);
+  if (h.type === 'zabudowa' || S.tasks.length >= 3 || now - (S.lastTaskAt || 0) < 15 * 60e3 || Math.random() > 0.4) return;
+  S.tasks.push({ id, until: now + DAY });
+  S.lastTaskAt = now;
+  buzz('task');
+  log(`Zadanie dodatkowe: zdjęcie tego miejsca (${TYPES[h.type].label}) da produkcję x2 przez 24 h. Możesz je zrobić później.`, true);
+}
+let photoFor = null;
+function startPhoto(id) { photoFor = id; $('photoInput').value = ''; $('photoInput').click(); }
+async function onPhoto(file) {
+  const id = photoFor, h = S.hexes[id];
+  if (!file || !h) return;
+  const text = `Ten kawałek okolicy (${TYPES[h.type].label.toLowerCase()}) jest mój w grze Terra. Dołącz i odbij go!`;
+  const url = location.origin + location.pathname;
+  try {
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'Terra', text, url });
+    else if (navigator.share) await navigator.share({ title: 'Terra', text, url });
+  } catch (e) {
+    if (e.name === 'AbortError') { toast('Udostępnianie anulowane. Zadanie czeka do jutra.'); return; }
+  }
+  h.boost = Date.now() + DAY;
+  h.inf[ME] = Math.min(MAX_INF, (h.inf[ME] || 0) + 20);
+  S.tasks = S.tasks.filter(t => t.id !== id);
+  buzz('quest');
+  flash('Dzięki za zdjęcie!', 'Produkcja x2 przez 24 h');
+  log(`Zadanie wykonane: zdjęcie (${TYPES[h.type].label}). Produkcja x2 do ${fmtTime(h.boost)} jutro, +20 wpływu`, false);
+  save(); render();
 }
 
 function tick() {
@@ -327,6 +462,7 @@ function tick() {
   for (const [id, h] of Object.entries(S.hexes)) {
     if (h.blocked) continue;
     for (const k in h.inf) { h.inf[k] *= f; if (h.inf[k] < 0.5) delete h.inf[k]; }
+    if (isSeat(h) && h.owner === ME) { h.inf[ME] = Math.max(h.inf[ME] || 0, 30); S.inv.monety += 3 * hours; }
     if (h.owner) h.store = Math.min(prodRate(h) * 24, (h.store || 0) + prodRate(h) * hours);
     updateOwner(id, h, 'decay');
   }
@@ -350,8 +486,8 @@ function botActivity(hours) {
     if (h.owner !== ME) { h.inf[h.owner] = Math.min(MAX_INF, (h.inf[h.owner] || 0) + 3 * h0); continue; }
     // Przechodnie płacą myto na Twoich heksach.
     if (Math.random() < 1 - Math.exp(-0.15 * h0)) { const t = tollOf(h); S.inv.monety += t; S.stats.tollEarned += t; tollIn += t; }
-    // Rywale naciskają na heksy przy swojej granicy.
-    if (now < (h.protect || 0)) continue;
+    // Rywale naciskają na heksy przy swojej granicy (poza Siedzibą).
+    if (now < (h.protect || 0) || isSeat(h)) continue;
     const enemy = neighborBot(id);
     if (!enemy) continue;
     const g = 0.6 * h0 / (1 + lvl(h, 'wieza'));
@@ -447,6 +583,7 @@ function renderWalkers() {
 function botGain(id, h, bot, g) {
   if (h.owner === bot) { h.inf[bot] = Math.min(MAX_INF, (h.inf[bot] || 0) + g); return; }
   if (h.owner && Date.now() < (h.protect || 0)) return;
+  if (h.owner === ME && isSeat(h)) return;
   // Na Twoim terenie boty wypierają wolniej, żeby nacisk był odczuwalny, ale nie przytłaczający.
   const k = h.owner === ME ? 0.5 : 1;
   if (h.owner) h.inf[h.owner] = Math.max(0, (h.inf[h.owner] || 0) - k * g / (1 + lvl(h, 'wieza')));
@@ -471,7 +608,7 @@ function moveTo(lat, lng, meters) {
   const c = h3.latLngToCell(lat, lng, RES);
   ensureArea(lat, lng);
   const h = S.hexes[c];
-  if (meters > 0) { S.stats.meters += meters; if (S.cargo) S.cargo.m += meters; }
+  if (meters > 0) { S.stats.meters += meters; walk.meters += meters; if (S.cargo) S.cargo.m += meters; }
   if (c !== S.cur) { S.cur = c; if (h) onEnter(c, h); }
   if (h && meters > 0 && !h.blocked) gain(c, h, meters / M_PER_POINT);
   save(); render(); follow();
@@ -504,11 +641,26 @@ function onEnter(id, h) {
     const amt = Math.floor(h.store || 0);
     if (amt > 0) { S.inv[resOf(h)] += amt; h.store -= amt; toast(`Zebrano +${amt} ${RESOURCES[resOf(h)].toLowerCase()}`); }
     route(id, h, now);
-  } else if (isBot(h.owner) && (!h.tollAt || now - h.tollAt > DAY)) {
+    return;
+  }
+  // Zwiad: po przejściu przez cudzy heks możesz go wyzwać na pojedynek przez 12 h, także z domu.
+  if (h.owner) h.scout = now + 12 * H;
+  if (isBot(h.owner) && (!h.tollAt || now - h.tollAt > DAY)) {
     const paid = Math.min(S.inv.monety, tollOf(h));
     S.inv.monety -= paid; S.stats.tollPaid += paid; h.tollAt = now;
-    if (paid > 0) toast(`Myto dla: ${owner(h.owner).name}, -${paid} monet`);
+    if (paid > 0) { buzz('toll'); toast(`Myto dla: ${owner(h.owner).name}, -${paid} monet`); }
   }
+}
+
+// Zbieranie z daleka: połowa magazynu, reszta przepada. Wejście na heks daje całość.
+function collectRemote(id) {
+  const h = S.hexes[id];
+  if (!h || h.owner !== ME) return;
+  const amt = Math.floor((h.store || 0) / 2);
+  if (amt < 1) return;
+  S.inv[resOf(h)] += amt; h.store = 0;
+  toast(`Zebrano zdalnie +${amt} ${RESOURCES[resOf(h)].toLowerCase()} (połowa magazynu)`);
+  save(); render();
 }
 
 // Szlak handlowy: ładunek z heksu jednego typu, dostawa do własnego heksu innego typu.
@@ -521,7 +673,10 @@ function route(id, h, now) {
       let pay = Math.round(c.m / 1000 * 30 + straight / 1000 * 20), bonus = '';
       if (S.inv.wozy >= 1) { S.inv.wozy--; pay = Math.round(pay * 1.5); bonus = ' (wóz x1,5)'; }
       S.inv.monety += pay; S.stats.routes++; S.stats.routeIncome += pay;
-      log(`Szlak handlowy ${RESOURCES[c.res]} → ${RESOURCES[res]}: ${Math.round(c.m)} m, +${pay} monet${bonus}`);
+      log(`Szlak handlowy ${RESOURCES[c.res]} → ${RESOURCES[res]}: ${Math.round(c.m)} m, +${pay} monet${bonus}`, false);
+      buzz('route');
+      flash(`Szlak handlowy +${pay}`, `${RESOURCES[c.res]} → ${RESOURCES[res]}`);
+      say(`Szlak handlowy. Plus ${pay} monet.`);
       S.cargo = { from: id, res, since: now, m: 0 };
       return;
     }
@@ -545,6 +700,7 @@ function setMode(m) {
       setStatus('Szukam sygnału GPS…');
       watchId = navigator.geolocation.watchPosition(onFix, err => setStatus('GPS: ' + err.message),
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+      keepAwake(true); // w przeglądarce GPS działa tylko przy włączonym ekranie
     }
   }
   if (S.mode === 'test' && !S.pos) teleport(...DEFAULT_START);
@@ -606,25 +762,30 @@ function teleport(lat, lng) {
 }
 
 // ---------- Budowa ----------
-function build(t) {
-  const h = S.hexes[S.cur];
-  if (!h || h.owner !== ME || (h.b && h.b.t !== t)) return;
+// Budować można na każdym swoim heksie, także z domu.
+function build(t, id) {
+  const h = S.hexes[id];
+  if (!h || h.owner !== ME || !BUILD[t].cost || (h.b && h.b.t !== t)) return;
   const l = (h.b ? h.b.l : 0) + 1;
   if (l > 3) return;
   const cost = BUILD[t].cost(l);
   if (!afford(cost)) { toast('Brakuje surowców: ' + costText(cost)); return; }
   for (const [k, v] of Object.entries(cost)) S.inv[k] -= v;
   h.b = { t, l };
-  log(`Zbudowano: ${BUILD[t].label} poz. ${l}`);
+  S.stats.built++;
+  buzz('capture');
+  flash(`${BUILD[t].label} poz. ${l}`, 'zbudowano');
+  log(`Zbudowano: ${BUILD[t].label} poz. ${l}`, false);
   save(); render();
 }
 
 // ---------- Pojedynek ----------
 const duel = { id: null, score: 0, ghost: 0, end: 0, timer: null, hop: null };
 const $ = id => document.getElementById(id);
-function openDuel() {
-  const id = S.cur, h = S.hexes[id], now = Date.now();
-  if (!h || !h.owner || h.owner === ME) return;
+const canDuel = (id, h) => !!(h && h.owner && h.owner !== ME && !h.blocked && (id === S.cur || Date.now() < (h.scout || 0)));
+function openDuel(id) {
+  const h = S.hexes[id], now = Date.now();
+  if (!canDuel(id, h)) return;
   if (now < (h.protect || 0)) { toast('Heks jest pod ochroną po niedawnym przejęciu.'); return; }
   if (now < (h.duelCd || 0)) { toast('Ten heks możesz wyzwać ponownie za ' + Math.ceil((h.duelCd - now) / 60e3) + ' min.'); return; }
   if (S.inv.monety < DUEL_STAKE) { toast('Na stawkę potrzeba 10 monet.'); return; }
@@ -661,7 +822,7 @@ function finishDuel() {
     h.inf[ME] = Math.min(MAX_INF, Math.max(h.inf[ME] || 0, (h.inf[defender] || 0) + 10));
     h.inf[defender] = (h.inf[defender] || 0) * 0.4;
     S.inv.monety += DUEL_STAKE * 2; S.stats.duelsWon++;
-    log(`Pojedynek wygrany ${duel.score}:${duel.ghost} z: ${owner(defender).name}, +${DUEL_STAKE} monet`);
+    log(`Pojedynek wygrany ${duel.score}:${duel.ghost} z: ${owner(defender).name}, +${DUEL_STAKE} monet`, false);
     updateOwner(duel.id, h, 'duel');
   } else {
     h.duelCd = now + H; S.stats.duelsLost++;
@@ -735,24 +896,33 @@ function renderCard() {
       ? `<div class="progress">Heks jest pod ochroną do ${fmtTime(h.protect)}. Teraz nie da się go wypierać.</div>`
       : `<div class="progress">Do zajęcia zostało ok. <b>${left} m</b> chodzenia po tym heksie${h.owner ? ' albo wygrany pojedynek' : ''}.</div>`;
   }
+  const task = (S.tasks || []).find(x => x.id === id && now < x.until);
+  if (task && h.owner === ME) {
+    html += `<div class="progress task">Zadanie dodatkowe: zrób zdjęcie tego miejsca i udostępnij je. Nagroda: produkcja x2 przez 24 h i +20 wpływu. Ważne do ${fmtTime(task.until)} jutro.
+      <div class="actions"><button class="btn primary" data-act="photo">Zrób zdjęcie i udostępnij</button></div></div>`;
+  }
+  if (boosted(h)) html += `<p class="muted">Produkcja x2 do ${fmtTime(h.boost)}.</p>`;
   const acts = [];
   if (!here && S.mode === 'test' && !h.blocked) acts.push('<button class="btn primary" data-act="walk">Idź tutaj</button>');
-  if (here && h.owner === ME) {
+  if (h.owner === ME) {
     for (const [k, b] of Object.entries(BUILD)) {
-      if (h.b && h.b.t !== k) continue;
+      if (!b.cost || (h.b && h.b.t !== k)) continue;
       const l = (h.b ? h.b.l : 0) + 1;
       if (l > 3) continue;
       const cost = b.cost(l);
       acts.push(`<button class="btn" data-act="build" data-t="${k}" ${afford(cost) ? '' : 'disabled'} title="${b.desc}">
         ${h.b ? 'Ulepsz' : 'Zbuduj'} ${b.label} ${l} (${costText(cost)})</button>`);
     }
+    if (!here && Math.floor((h.store || 0) / 2) >= 1) acts.push(`<button class="btn" data-act="collect">Zbierz zdalnie ${Math.floor(h.store / 2)} (połowa)</button>`);
   }
-  if (here && h.owner && h.owner !== ME && !h.blocked) {
+  if (canDuel(id, h)) {
     acts.push(`<button class="btn primary" data-act="duel">Wyzwij na pojedynek (stawka ${DUEL_STAKE})</button>`);
   }
   if (!here) acts.push('<button class="btn" data-act="back">Pokaż mój heks</button>');
-  if (here && h.owner === ME) html += `<p class="muted">Targ: ${BUILD.targ.desc}. Wieża: ${BUILD.wieza.desc}.</p>`;
-  if (here && h.owner && h.owner !== ME) html += '<p class="muted">Chodząc tu, powoli wypierasz właściciela. Pojedynek przejmuje heks od razu.</p>';
+  if (h.owner === ME && isSeat(h)) html += `<p class="muted">Siedziba: ${BUILD.siedziba.desc}.</p>`;
+  else if (h.owner === ME) html += `<p class="muted">Budować możesz też z domu. Targ: ${BUILD.targ.desc}. Wieża: ${BUILD.wieza.desc}.</p>`;
+  if (here && h.owner && h.owner !== ME) html += '<p class="muted">Chodząc tu, powoli wypierasz właściciela. Przejście daje też zwiad: przez 12 h wyzwiesz ten heks na pojedynek nawet z domu.</p>';
+  if (!here && h.owner && h.owner !== ME && !canDuel(id, h)) html += '<p class="muted">Przejdź przez ten heks, żeby zdobyć zwiad i móc go wyzwać.</p>';
   // Podmieniamy kartę tylko przy zmianie treści, żeby przycisk nie znikał spod palca.
   const next = html + `<div class="actions">${acts.join('')}</div>`;
   if (el.dataset.html !== next) { el.innerHTML = next; el.dataset.html = next; }
@@ -761,19 +931,75 @@ function renderCard() {
 function renderMenu() {
   $('modeGps').classList.toggle('on', S.mode === 'gps');
   $('modeTest').classList.toggle('on', S.mode === 'test');
+  $('setVibe').checked = !!S.settings.vibe;
+  $('setVoice').checked = !!S.settings.voice;
   const st = S.stats, mine = Object.values(S.hexes).filter(h => h.owner === ME).length;
   $('stats').innerHTML = `<dl class="kv">
     <dt>Twoje heksy</dt><dd>${mine}</dd><dt>Przebyty dystans</dt><dd>${(st.meters / 1000).toFixed(2)} km</dd>
     <dt>Zdobyte łącznie</dt><dd>${st.captured}</dd><dt>Szlaki handlowe</dt><dd>${st.routes} (+${st.routeIncome} monet)</dd>
     <dt>Myto zapłacone</dt><dd>${st.tollPaid}</dd><dt>Myto zarobione</dt><dd>${st.tollEarned}</dd>
-    <dt>Pojedynki</dt><dd>${st.duelsWon} wygrane, ${st.duelsLost} przegrane</dd></dl>`;
+    <dt>Pojedynki</dt><dd>${st.duelsWon} wygrane, ${st.duelsLost} przegrane</dd><dt>Budynki postawione</dt><dd>${st.built}</dd></dl>`;
   $('diag').innerHTML = diagHtml();
   $('log').innerHTML =S.log.slice(0, 30).map(e => `<li><span class="muted">${fmtTime(e.t)}</span> ${e.msg}</li>`).join('') || '<li class="muted">pusto</li>';
 }
 
+function renderChips() {
+  const out = [], now = Date.now(), q = QUESTS[S.q];
+  if (q) {
+    const [have, need] = q.prog(S);
+    out.push(`<button class="qchip" data-chip="quest"><b>Zadanie:</b> ${q.title} (${Math.min(have, need)}/${need})</button>`);
+  }
+  const L = S.lastLost;
+  if (L && (now - L.t > 2 * H || !S.hexes[L.id] || S.hexes[L.id].owner === ME)) S.lastLost = null;
+  if (S.lastLost) {
+    const d = direction(S.lastLost.id);
+    if (d) out.push(`<button class="qchip lost" data-chip="lost">${d.arrow} Odbij heks: ${d.m} m, ${d.name}</button>`);
+  }
+  const tasks = (S.tasks || []).filter(t => now < t.until && S.hexes[t.id]?.owner === ME);
+  if (tasks.length) out.push(`<button class="qchip task" data-chip="task">Zadania ze zdjęciem: ${tasks.length}</button>`);
+  const html = out.join(''), el = $('chips');
+  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+}
+function showHex(id) {
+  if (!id || !S.hexes[id]) return;
+  sel = id === S.cur ? null : id;
+  followOn = false;
+  const [la, ln] = center(id);
+  if (mapReady) map.easeTo({ center: [ln, la], duration: 500 });
+  render();
+}
+
+// ---------- Tryb kieszonkowy ----------
+// Telefon w kieszeni: ciemny ekran (oszczędza baterię), ekran nie gaśnie, więc GPS działa. Wibracja i głos informują o zdarzeniach.
+const walk = { meters: 0, captured: 0, events: [] };
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch (e) { /* przeglądarka odmówiła */ }
+}
+function pocketEvent(t) {
+  walk.events.unshift(`${fmtTime(Date.now())} ${t}`);
+  walk.events.length = Math.min(walk.events.length, 4);
+}
+function renderPocket() {
+  if ($('pocket').hidden) return;
+  $('pStats').innerHTML = `<div><b>${walk.captured}</b><span>heksy na tym spacerze</span></div>
+    <div><b>${(walk.meters / 1000).toFixed(2)} km</b><span>dystans</span></div>
+    <div><b>${Math.floor(S.inv.monety)}</b><span>monety</span></div>`;
+  $('pEvents').innerHTML = walk.events.map(e => `<li>${e}</li>`).join('') || '<li>Idź przed siebie. Wibracja da znać o każdej zdobyczy.</li>';
+  const q = QUESTS[S.q], p = q && q.prog(S);
+  $('pQuest').textContent = q ? `Zadanie: ${q.title} (${Math.min(p[0], p[1])}/${p[1]})` : '';
+  $('pGps').textContent = S.mode === 'gps' ? $('gps').textContent : 'Tryb testowy';
+}
+
 let mapQueued = false;
 function render() {
-  renderInv(); renderCargo(); renderCard(); renderGps();
+  checkQuests();
+  renderInv(); renderCargo(); renderCard(); renderGps(); renderChips(); renderPocket();
   if (!$('menu').hidden) renderMenu();
   if (mapReady && !mapQueued) { mapQueued = true; requestAnimationFrame(() => { mapQueued = false; renderMap(); }); }
 }
@@ -790,7 +1016,7 @@ function renderMap() {
       geometry: { type: 'Polygon', coordinates: [boundary(id)] } });
     if (h.b) {
       const [la, ln] = center(id);
-      buildings.push({ type: 'Feature', properties: { label: (h.b.t === 'targ' ? 'T' : 'W') + h.b.l, color: owner(h.owner).color || '#495057' },
+      buildings.push({ type: 'Feature', properties: { label: BLD_LETTER[h.b.t] + (isSeat(h) ? '' : h.b.l), color: h.owner ? owner(h.owner).color : '#495057' },
         geometry: { type: 'Point', coordinates: [ln, la] } });
     }
   }
@@ -805,6 +1031,7 @@ function renderMap() {
   map.getSource('me').setData({ type: 'FeatureCollection', features: pts });
   map.getSource('cargo').setData({ type: 'FeatureCollection', features: lines });
   map.setFilter('hex-sel', ['==', ['get', 'id'], sel || S.cur || '']);
+  map.setFilter('hex-lost', ['==', ['get', 'id'], S.lastLost?.id || '']);
   renderWalkers();
 }
 
@@ -828,6 +1055,7 @@ function initMap() {
     for (const s of ['hexes', 'buildings', 'me', 'cargo', 'walkers', 'walker-heads']) map.addSource(s, { type: 'geojson', data: empty });
     map.addLayer({ id: 'hex-fill', type: 'fill', source: 'hexes', paint: { 'fill-color': ['get', 'fill'], 'fill-opacity': ['get', 'op'] } });
     map.addLayer({ id: 'hex-line', type: 'line', source: 'hexes', paint: { 'line-color': ['get', 'line'], 'line-width': ['get', 'w'], 'line-opacity': 0.7 } });
+    map.addLayer({ id: 'hex-lost', type: 'line', source: 'hexes', filter: ['==', ['get', 'id'], ''], paint: { 'line-color': '#e03131', 'line-width': 4, 'line-dasharray': [1.5, 1] } });
     map.addLayer({ id: 'hex-sel', type: 'line', source: 'hexes', filter: ['==', ['get', 'id'], ''], paint: { 'line-color': '#111', 'line-width': 3 } });
     map.addLayer({ id: 'cargo-line', type: 'line', source: 'cargo', paint: { 'line-color': '#e67700', 'line-width': 3, 'line-dasharray': [2, 2] } });
     map.addLayer({ id: 'bld', type: 'circle', source: 'buildings', paint: { 'circle-radius': 10, 'circle-color': '#fff', 'circle-stroke-width': 3, 'circle-stroke-color': ['get', 'color'] } });
@@ -855,10 +1083,24 @@ function bindUi() {
     const act = b.dataset.act;
     if (act === 'walk') { const [la, ln] = center(sel); sel = null; walkTo(la, ln); }
     else if (act === 'back') { sel = null; followOn = true; follow(true); render(); }
-    else if (act === 'build') build(b.dataset.t);
-    else if (act === 'duel') openDuel();
+    else if (act === 'build') build(b.dataset.t, sel || S.cur);
+    else if (act === 'duel') openDuel(sel || S.cur);
+    else if (act === 'collect') collectRemote(sel || S.cur);
+    else if (act === 'photo') startPhoto(sel || S.cur);
   });
   $('recenter').onclick = () => { followOn = true; sel = null; follow(true); render(); };
+  $('chips').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const c = b.dataset.chip;
+    if (c === 'quest') { const q = QUESTS[S.q]; if (q) toast(q.hint); }
+    else if (c === 'lost') showHex(S.lastLost?.id);
+    else if (c === 'task') showHex((S.tasks || []).find(t => Date.now() < t.until && S.hexes[t.id]?.owner === ME)?.id);
+  });
+  $('pocketBtn').onclick = () => { $('pocket').hidden = false; keepAwake(true); renderPocket(); };
+  $('pocket').addEventListener('dblclick', () => { $('pocket').hidden = true; });
+  $('photoInput').addEventListener('change', e => onPhoto(e.target.files[0]));
+  $('setVibe').onchange = e => { S.settings.vibe = e.target.checked; save(); buzz('capture'); };
+  $('setVoice').onchange = e => { S.settings.voice = e.target.checked; save(); say('Komunikaty głosowe włączone.'); };
   $('menuBtn').onclick = () => { $('menu').hidden = false; renderMenu(); };
   $('menuClose').onclick = () => { $('menu').hidden = true; };
   $('modeGps').onclick = () => { setMode('gps'); renderMenu(); };
@@ -880,7 +1122,11 @@ function bindUi() {
     if (!duel.end || Date.now() > duel.end || !$('dIntro').hidden) return;
     duel.score = Math.max(0, duel.score - 1); $('dScore').textContent = duel.score;
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    tick();
+    if (S.mode === 'gps') keepAwake(true);
+  });
 }
 
 function main() {

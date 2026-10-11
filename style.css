@@ -148,3 +148,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 #rankList .pts { font-weight: 700; }
 .qchip.install { background: #1971c2; color: #fff; font-weight: 600; }
 .tnote { flex: 1; min-width: 0; padding: 9px 10px; font: inherit; font-size: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+.qchip.team { background: #0b7285; color: #fff; }
+.qchip.team.near { background: #2b8a3e; font-weight: 600; }
+.avatar-pin.mate .face { width: 32px; height: 32px; font-size: 18px; }
+ul.team { margin: 4px 0 8px; padding-left: 18px; }

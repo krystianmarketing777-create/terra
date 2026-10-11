@@ -36,6 +36,7 @@ const BOT_COLORS = ['#e03131', '#7048e8', '#f08c00', '#c2255c', '#862e9c', '#d94
 function owner(id) {
   if (id === ME) return meInfo();
   if (S.bots[id]) return { ...S.bots[id], lvl: levelOf(scoreOf(id)) };
+  if (isMate(id)) { const m = mates[id.slice(3)] || S.team?.known?.[id.slice(3)]; return { name: m?.name || 'Drużyna', emoji: m?.emoji, color: m?.color || '#0b7285', mate: true }; }
   return NPC[id] || { name: '?', color: '#495057' };
 }
 
@@ -61,6 +62,7 @@ function scores() {
 const scoreOf = id => scores()[id]?.total || 0;
 const levelOf = p => Math.floor(Math.sqrt(p / 40)) + 1;
 const isBot = id => !!(id && S.bots[id]);
+const isMate = id => typeof id === 'string' && id.startsWith('tm:');
 const botIds = () => Object.keys(S.bots);
 const TYPES = {
   zielen: { label: 'Zieleń', res: 'drewno', color: '#2b8a3e' },
@@ -422,6 +424,7 @@ function changeOwner(id, h, from, to, cause) {
     say(`Heks zdobyty. ${label}.`);
     log(`Heks zdobyty (${label})${loot ? `, łup +${loot} ${RESOURCES[resOf(h)].toLowerCase()}` : ''}${buildingNote}`);
     if (S.lastLost?.id === id) S.lastLost = null;
+    teamPub({ k: 'cap', cell: id });
     maybeTask(id, h);
     if (id === S.cur) route(id, h, now);
   } else if (from === ME) {
@@ -708,7 +711,8 @@ function metersToCapture(h) {
 }
 
 function gain(id, h, g) {
-  if (h.owner && h.owner !== ME) {
+  if (teamNear()) g *= 1.2;
+  if (h.owner && h.owner !== ME && !isMate(h.owner)) {
     if (Date.now() < (h.protect || 0)) return;
     h.inf[h.owner] = Math.max(0, (h.inf[h.owner] || 0) - g / defense(h));
   }
@@ -828,7 +832,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v15';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -897,6 +901,7 @@ function onFix(p) {
     return;
   }
   diag.counted++; diag.meters += d;
+  if (Date.now() - lastPub > 10e3) { lastPub = Date.now(); teamPub({ k: 'pos', lat: r5(lat), lng: r5(lng) }); }
   T('fix', { ...raw, r: 'ok', d: r1(d), v: r1(v), cell: h3.latLngToCell(lat, lng, RES) });
   moveTo(lat, lng, d);
   renderGps();
@@ -959,7 +964,7 @@ function build(t, id) {
 // ---------- Pojedynek ----------
 const duel = { id: null, score: 0, ghost: 0, end: 0, timer: null, hop: null };
 const $ = id => document.getElementById(id);
-const canDuel = (id, h) => !!(h && h.owner && h.owner !== ME && !h.blocked && (id === S.cur || Date.now() < (h.scout || 0)));
+const canDuel = (id, h) => !!(h && h.owner && h.owner !== ME && !isMate(h.owner) && !h.blocked && (id === S.cur || Date.now() < (h.scout || 0)));
 function openDuel(id) {
   const h = S.hexes[id], now = Date.now();
   if (!canDuel(id, h)) return;
@@ -1111,6 +1116,127 @@ async function invite() {
   } catch (e) { /* anulowane */ }
 }
 
+// ---------- Drużyna (test na publicznym serwerze wiadomości ntfy.sh) ----------
+// Członkowie drużyny widzą się na mapie, nie wypierają się nawzajem, ich zdobycze są wspólne,
+// a idąc obok siebie (do 40 m) dostają +20% do zdobywania. Docelowo zastąpi to serwer gry.
+const TEAM_HUB = 'https://ntfy.sh/';
+const mates = {};
+let teamES = null, lastPub = 0;
+const teamTopic = () => 'terra-druzyna-' + S.team.code.toLowerCase();
+function newCode() { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; return Array.from({ length: 6 }, () => a[Math.floor(Math.random() * a.length)]).join(''); }
+function teamPub(msg) {
+  if (!S.team) return;
+  const p = meInfo();
+  fetch(TEAM_HUB + teamTopic(), { method: 'POST', body: JSON.stringify({ ...msg, pid: S.pid, name: p.name, emoji: p.emoji, color: p.color }) }).catch(() => {});
+}
+function teamConnect() {
+  teamES?.close(); teamES = null;
+  if (!S.team) return;
+  teamES = new EventSource(TEAM_HUB + teamTopic() + '/sse?since=10m');
+  teamES.onmessage = e => {
+    let d;
+    try { d = JSON.parse(JSON.parse(e.data).message); } catch (err) { return; }
+    if (d && d.pid && d.pid !== S.pid) onTeamMsg(d);
+  };
+  teamES.onerror = () => T('team', 'sse-error');
+  teamPub({ k: 'hello', lat: S.pos ? r5(S.pos[0]) : null, lng: S.pos ? r5(S.pos[1]) : null });
+}
+function onTeamMsg(d) {
+  const m = mates[d.pid] ??= {}, isNew = !m.name;
+  Object.assign(m, { name: d.name, emoji: d.emoji, color: d.color });
+  (S.team.known ??= {})[d.pid] = { name: d.name, emoji: d.emoji, color: d.color };
+  if (d.lat != null) { m.lat = d.lat; m.lng = d.lng; m.t = Date.now(); }
+  if (isNew) {
+    log(`${d.emoji} ${d.name} jest w Twojej drużynie`, true);
+    buzz('quest');
+    T('team', { mate: d.name });
+    if (d.k === 'hello') teamPub({ k: 'pos', lat: S.pos ? r5(S.pos[0]) : null, lng: S.pos ? r5(S.pos[1]) : null });
+  }
+  if (d.k === 'cap' && d.cell && S.hexes[d.cell]) {
+    const h = S.hexes[d.cell], key = 'tm:' + d.pid;
+    if (h.owner === ME) h.shared = d.name;
+    else if (!h.owner || NPC[h.owner] || isMate(h.owner)) {
+      h.inf[key] = Math.max(15, h.inf[key] || 0);
+      if (!h.owner || NPC[h.owner]) { if (NPC[h.owner]) delete h.inf[h.owner]; h.owner = key; h.protect = 0; }
+    }
+    T('team', { cap: d.cell, by: d.name });
+    feed(`${d.emoji} ${d.name} zdobywa heks dla drużyny`, false);
+  }
+  save(); render();
+}
+// Najbliższy członek drużyny z aktualną pozycją (ostatnie 60 s).
+function nearestMate() {
+  if (!S.pos) return null;
+  let best = null;
+  for (const m of Object.values(mates)) {
+    if (m.lat == null || Date.now() - m.t > 60e3) continue;
+    const dm = dist(S.pos, [m.lat, m.lng]);
+    if (!best || dm < best.d) best = { ...m, d: dm };
+  }
+  return best;
+}
+const teamNear = () => { const m = nearestMate(); return !!m && m.d <= 40; };
+function teamCreate() {
+  S.team = { code: newCode(), known: {} };
+  T('team', { create: S.team.code });
+  save(); teamConnect(); renderTeam(); render(); teamInvite();
+}
+function teamJoin(code) {
+  code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length !== 6) { toast('Kod drużyny ma 6 znaków.'); return; }
+  S.team = { code, known: {} };
+  T('team', { join: code });
+  save(); teamConnect(); renderTeam(); render();
+  log(`Dołączono do drużyny ${code}. Czekam na pozostałych.`, true);
+}
+function teamLeave() {
+  teamPub({ k: 'bye' });
+  teamES?.close(); teamES = null;
+  for (const id of Object.keys(mates)) { mateMarkers[id]?.remove(); delete mateMarkers[id]; delete mates[id]; }
+  T('team', 'leave');
+  S.team = null; save(); renderTeam(); render();
+}
+async function teamInvite() {
+  if (!S.team) return;
+  const url = `${GAME_URL}?druzyna=${S.team.code}`;
+  const text = `Dołącz do mojej drużyny w Terra (kod ${S.team.code}). Idziemy razem i zdobywamy teren wspólnie:`;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'Terra: drużyna', text, url }); return; }
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    toast('Skopiowano link do drużyny.');
+  } catch (e) { /* anulowane */ }
+}
+function renderTeam() {
+  const el = $('teamBox');
+  if (!S.team) {
+    el.innerHTML = `<div class="row"><button class="btn primary" data-team="create">Utwórz drużynę</button></div>
+      <div class="row" style="margin-top:8px"><input id="teamCode" class="tnote" placeholder="Kod drużyny, np. K7X4QP" maxlength="8"><button class="btn" data-team="join">Dołącz</button></div>`;
+    return;
+  }
+  const list = Object.values(mates).map(m => `<li>${m.emoji || ''} ${m.name}${m.lat != null && S.pos ? `, ${Math.round(dist(S.pos, [m.lat, m.lng]))} m` : ''}</li>`).join('')
+    || '<li class="muted">Nikt jeszcze nie dołączył. Wyślij link.</li>';
+  el.innerHTML = `<p>Kod drużyny: <b>${S.team.code}</b></p><ul class="team">${list}</ul>
+    <div class="row"><button class="btn primary" data-team="invite">Zaproś do drużyny</button><button class="btn" data-team="leave">Opuść drużynę</button></div>`;
+}
+const mateMarkers = {};
+function renderMates() {
+  if (!mapReady) return;
+  for (const [id, m] of Object.entries(mates)) {
+    if (m.lat == null || Date.now() - m.t > 10 * 60e3) { mateMarkers[id]?.remove(); delete mateMarkers[id]; continue; }
+    if (!mateMarkers[id]) {
+      const el = document.createElement('div');
+      el.className = 'avatar-pin mate';
+      el.innerHTML = '<span class="face"></span><span class="tag"></span>';
+      mateMarkers[id] = new maplibregl.Marker({ element: el, anchor: 'center' });
+    }
+    const el = mateMarkers[id].getElement();
+    el.querySelector('.face').textContent = m.emoji || '🙂';
+    el.querySelector('.face').style.borderColor = m.color;
+    el.querySelector('.tag').textContent = m.name;
+    mateMarkers[id].setLngLat([m.lng, m.lat]).addTo(map);
+  }
+}
+
 // ---------- Ranking okolicy ----------
 function renderRank() {
   const sc = scores();
@@ -1205,6 +1331,7 @@ function renderCard() {
 
 function renderMenu() {
   renderTinfo();
+  renderTeam();
   $('modeGps').classList.toggle('on', S.mode === 'gps');
   $('modeTest').classList.toggle('on', S.mode === 'test');
   $('setVibe').checked = !!S.settings.vibe;
@@ -1230,6 +1357,10 @@ function renderChips() {
   if (S.lastLost) {
     const d = direction(S.lastLost.id);
     if (d) out.push(`<button class="qchip lost" data-chip="lost">${d.arrow} Odbij heks: ${d.m} m, ${d.name}</button>`);
+  }
+  if (S.team) {
+    const m = nearestMate();
+    out.push(`<button class="qchip team${m && m.d <= 40 ? ' near' : ''}" data-chip="team">Drużyna ${S.team.code}: ${m ? `${m.emoji || ''} ${m.name} ${Math.round(m.d)} m${m.d <= 40 ? ', razem +20%' : ''}` : Object.keys(mates).length ? 'członkowie poza zasięgiem' : 'czekam na członków'}</button>`);
   }
   const tasks = (S.tasks || []).filter(t => now < t.until && S.hexes[t.id]?.owner === ME);
   if (tasks.length) out.push(`<button class="qchip task" data-chip="task">Zadania ze zdjęciem: ${tasks.length}</button>`);
@@ -1312,6 +1443,7 @@ function renderMap() {
   if (meMarker && S.pos) { updateAvatarEl(meMarker.getElement()); meMarker.setLngLat([S.pos[1], S.pos[0]]).addTo(map); }
   map.getSource('cargo').setData({ type: 'FeatureCollection', features: lines });
   map.setFilter('hex-sel', ['==', ['get', 'id'], sel || S.cur || '']);
+  renderMates();
   map.setFilter('hex-lost', ['==', ['get', 'id'], S.lastLost?.id || '']);
   renderWalkers();
 }
@@ -1375,6 +1507,7 @@ function bindUi() {
     const c = b.dataset.chip;
     if (c === 'quest') { const q = QUESTS[S.q]; if (q) toast(q.hint); }
     else if (c === 'lost') showHex(S.lastLost?.id);
+    else if (c === 'team') { $('menu').hidden = false; renderMenu(); }
     else if (c === 'install') { S.installHide = true; doInstall(); }
     else if (c === 'task') showHex((S.tasks || []).find(t => Date.now() < t.until && S.hexes[t.id]?.owner === ME)?.id);
   });
@@ -1393,6 +1526,14 @@ function bindUi() {
   $('pocketBtn').onclick = () => { $('pocket').hidden = false; T('pocket', 1); keepAwake(true); renderPocket(); };
   $('pocket').addEventListener('dblclick', () => { $('pocket').hidden = true; T('pocket', 0); });
   $('texport').onclick = exportTest;
+  $('teamBox').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const a = b.dataset.team;
+    if (a === 'create') teamCreate();
+    else if (a === 'join') teamJoin($('teamCode').value);
+    else if (a === 'invite') teamInvite();
+    else if (a === 'leave' && confirm('Opuścić drużynę?')) teamLeave();
+  });
   $('tnoteAdd').onclick = () => { const v = $('tnote').value.trim(); if (!v) return; T('note', v); $('tnote').value = ''; toast('Notatka zapisana w danych testu.'); renderTinfo(); };
   $('photoInput').addEventListener('change', e => onPhoto(e.target.files[0]));
   $('setVibe').onchange = e => { S.settings.vibe = e.target.checked; save(); buzz('capture'); };
@@ -1432,6 +1573,14 @@ function main() {
   window.addEventListener('unhandledrejection', e => T('error', String(e.reason?.message || e.reason)));
   window.addEventListener('pagehide', saveTlog);
   setInterval(snapshot, 60e3);
+  S.pid ??= Math.random().toString(36).slice(2, 10);
+  const inviteCode = new URLSearchParams(location.search).get('druzyna');
+  if (inviteCode && (!S.team || S.team.code !== inviteCode.toUpperCase())) {
+    history.replaceState(null, '', location.pathname);
+    setTimeout(() => { if (confirm(`Dołączyć do drużyny ${inviteCode.toUpperCase()}?`)) teamJoin(inviteCode); }, 800);
+  }
+  if (S.team) teamConnect();
+  setInterval(() => { if (S.team && S.pos && Date.now() - lastPub > 20e3) { lastPub = Date.now(); teamPub({ k: 'pos', lat: r5(S.pos[0]), lng: r5(S.pos[1]) }); } }, 10e3);
   bindUi();
   renderInstall();
   initMap();

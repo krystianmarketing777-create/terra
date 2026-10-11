@@ -56,6 +56,8 @@ function scores() {
   add(ME, 'km', S.stats.meters / 1000); add(ME, 'routes', S.stats.routes); add(ME, 'duels', S.stats.duelsWon);
   for (const [id, b] of Object.entries(S.bots)) { add(id, 'km', b.km || 0); add(id, 'routes', b.routes || 0); }
   for (const s of Object.values(m)) s.total = Math.round(s.hexes * 10 + s.buildings * 15 + s.km * 20 + s.routes * 10 + s.duels * 25);
+  m[ME].bosses = S.stats.bosses || 0; m[ME].chests = S.stats.chests || 0;
+  m[ME].total += m[ME].bosses * 50 + m[ME].chests * 5;
   scoreCache = { t: now, map: m };
   return m;
 }
@@ -425,6 +427,7 @@ function changeOwner(id, h, from, to, cause) {
     log(`Heks zdobyty (${label})${loot ? `, łup +${loot} ${RESOURCES[resOf(h)].toLowerCase()}` : ''}${buildingNote}`);
     if (S.lastLost?.id === id) S.lastLost = null;
     teamPub({ k: 'cap', cell: id });
+    if (cause === 'walk') streakCapture();
     maybeTask(id, h);
     if (id === S.cur) route(id, h, now);
   } else if (from === ME) {
@@ -458,6 +461,10 @@ function bearing(a, b) {
   const y = Math.sin(dl) * Math.cos(b[0] * r);
   const x = Math.cos(a[0] * r) * Math.sin(b[0] * r) - Math.sin(a[0] * r) * Math.cos(b[0] * r) * Math.cos(dl);
   return (Math.atan2(y, x) / r + 360) % 360;
+}
+function direction2(pt) {
+  const [arrow, name] = DIRS[Math.round(bearing(S.pos, pt) / 45) % 8];
+  return { arrow, name, m: Math.round(dist(S.pos, pt) / 10) * 10 };
 }
 function direction(id) {
   if (!S.pos) return null;
@@ -696,6 +703,7 @@ function moveTo(lat, lng, meters) {
   if (meters > 0) { S.stats.meters += meters; walk.meters += meters; if (S.cargo) S.cargo.m += meters; }
   if (c !== S.cur) { S.cur = c; if (h) onEnter(c, h); }
   if (h && meters > 0 && !h.blocked) gain(c, h, meters / M_PER_POINT);
+  checkChests();
   save(); render(); follow();
 }
 
@@ -712,6 +720,7 @@ function metersToCapture(h) {
 
 function gain(id, h, g) {
   if (teamNear()) g *= 1.2;
+  g *= Math.min(2, streakMult());
   if (h.owner && h.owner !== ME && !isMate(h.owner)) {
     if (Date.now() < (h.protect || 0)) return;
     h.inf[h.owner] = Math.max(0, (h.inf[h.owner] || 0) - g / defense(h));
@@ -832,7 +841,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v16';
+const APP_VERSION = 'v17';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -971,13 +980,17 @@ function openDuel(id) {
   if (now < (h.protect || 0)) { toast('Heks jest pod ochroną po niedawnym przejęciu.'); return; }
   if (now < (h.duelCd || 0)) { toast('Ten heks możesz wyzwać ponownie za ' + Math.ceil((h.duelCd - now) / 60e3) + ' min.'); return; }
   if (S.inv.monety < DUEL_STAKE) { toast('Na stawkę potrzeba 10 monet.'); return; }
-  duel.id = id; duel.ghost = garrison(h); duel.score = 0;
+  duel.id = id; duel.ghost = garrison(h); duel.score = 0; duel.boss = null;
+  { const intro = $('dIntro'), ps = intro.querySelectorAll('p');
+    intro.querySelector('h2').textContent = 'Pojedynek o heks';
+    ps[0].textContent = 'Trafiaj w cel przez 20 sekund. Pudło odejmuje punkt. Pobij wynik garnizonu obrońcy.';
+    ps[1].textContent = `Stawka: ${DUEL_STAKE} monet. Wygrana daje heks, budynki (o poziom niżej) i część magazynu.`; }
   $('dGhost').textContent = duel.ghost; $('dScore').textContent = 0; $('dTime').textContent = DUEL_SECONDS;
   $('dIntro').hidden = false; $('target').style.display = 'none';
   $('duel').hidden = false;
 }
 function startDuel() {
-  S.inv.monety -= DUEL_STAKE;
+  if (!duel.boss) S.inv.monety -= DUEL_STAKE;
   $('dIntro').hidden = true;
   duel.end = Date.now() + DUEL_SECONDS * 1000;
   hopTarget();
@@ -999,6 +1012,7 @@ function hopTarget() {
 function finishDuel() {
   clearInterval(duel.timer); clearTimeout(duel.hop);
   $('target').style.display = 'none';
+  if (duel.boss) { $('duel').hidden = true; finishBoss(); return; }
   const h = S.hexes[duel.id], defender = h.owner, now = Date.now();
   if (duel.score > duel.ghost && defender && defender !== ME) {
     h.inf[ME] = Math.min(MAX_INF, Math.max(h.inf[ME] || 0, (h.inf[defender] || 0) + 10));
@@ -1237,6 +1251,180 @@ function renderMates() {
   }
 }
 
+// ---------- Bossowie: legendarni strażnicy znanych miejsc ----------
+// Walka to ta sama gra zręcznościowa co pojedynek. Trzeba stać przy bossie (do 60 m).
+// Drużyna obok siebie osłabia bossa o 6 pkt, a Smok Wawelski wymaga drużyny. Każdego bossa można pokonać raz dziennie.
+const BOSSES = [
+  { id: 'sowa', name: 'Sowa z Prądnika', emoji: '🦉', lat: 50.08650, lng: 19.93836, power: 15, lore: 'Pilnuje północnego końca Prądnickiej i widzi każdego przechodnia.', reward: { monety: 40, drewno: 15 } },
+  { id: 'wilk', name: 'Prądnicki Wilk', emoji: '🐺', lat: 50.08229, lng: 19.93822, power: 16, lore: 'Wyje nad doliną Prądnika, odkąd sięga pamięć.', reward: { monety: 40, drewno: 20 } },
+  { id: 'kramarka', name: 'Kramarka z Nowego Kleparza', emoji: '🧺', lat: 50.07456, lng: 19.93590, power: 17, lore: 'Nikt jeszcze nie utargował z nią lepszej ceny.', reward: { monety: 50, towary: 20 } },
+  { id: 'bies', name: 'Kleparski Bies', emoji: '😈', lat: 50.06749, lng: 19.94076, power: 18, lore: 'Miesza w koszykach na Starym Kleparzu.', reward: { monety: 50, towary: 15, wozy: 2 } },
+  { id: 'rycerz', name: 'Rycerz spod Grunwaldu', emoji: '⚔️', lat: 50.06655, lng: 19.94224, power: 19, lore: 'Zszedł z pomnika i szuka godnego przeciwnika.', reward: { monety: 60, slawa: 10 } },
+  { id: 'barbakan', name: 'Strażnik Barbakanu', emoji: '🛡️', lat: 50.06546, lng: 19.94145, power: 20, lore: 'Od pięciuset lat nie wpuścił nikogo bez walki.', reward: { monety: 60, slawa: 12 } },
+  { id: 'dworzec', name: 'Duch Dworca', emoji: '🚂', lat: 50.06765, lng: 19.94614, power: 18, lore: 'Wciąż czeka na pociąg, który odjechał w 1847 roku.', reward: { monety: 60, wozy: 3 } },
+  { id: 'hejnalista', name: 'Hejnalista', emoji: '🎺', lat: 50.06165, lng: 19.93945, power: 21, lore: 'Przerywa melodię tylko dla najszybszych.', reward: { monety: 70, slawa: 15 } },
+  { id: 'smok', name: 'Smok Wawelski', emoji: '🐉', lat: 50.05475, lng: 19.93611, power: 27, team: true, lore: 'Pokonać go można tylko razem. Podejdźcie do Wawelu drużyną.', reward: { monety: 150, slawa: 30, wozy: 5 } },
+];
+const BOSS_RANGE = 60;
+const today = () => new Date().toISOString().slice(0, 10);
+const bossDoneToday = b => S.bossDone?.[b.id] === today();
+function nearestBoss() {
+  if (!S.pos) return null;
+  let best = null;
+  for (const b of BOSSES) {
+    if (bossDoneToday(b)) continue;
+    const d = dist(S.pos, [b.lat, b.lng]);
+    if (!best || d < best.d) best = { b, d };
+  }
+  return best;
+}
+function openBoss(b) {
+  const now = Date.now();
+  if (!S.pos || dist(S.pos, [b.lat, b.lng]) > BOSS_RANGE) { toast(`Podejdź do ${b.name} (do ${BOSS_RANGE} m).`); return; }
+  if (bossDoneToday(b)) { toast(`${b.name} jest już dziś pokonany. Wróć jutro.`); return; }
+  if (now < (S.bossCd?.[b.id] || 0)) { toast(`${b.name} odpoczywa. Spróbuj za ${Math.ceil((S.bossCd[b.id] - now) / 60e3)} min.`); return; }
+  const together = teamNear();
+  if (b.team && !together) { toast(`${b.emoji} ${b.name}: ${b.lore}`); return; }
+  duel.boss = b; duel.id = null; duel.score = 0;
+  duel.ghost = b.power + Math.floor(Math.random() * 4) - (together ? 6 : 0);
+  const intro = $('dIntro'), ps = intro.querySelectorAll('p');
+  intro.querySelector('h2').textContent = `${b.emoji} ${b.name}`;
+  ps[0].textContent = `${b.lore} Trafiaj w cel przez 20 sekund i pobij wynik ${duel.ghost}.${together ? ' Drużyna obok osłabia bossa!' : ''}`;
+  ps[1].textContent = `Bez stawki. Nagroda: ${costText(b.reward)} i 50 pkt.`;
+  $('dGhost').textContent = duel.ghost; $('dScore').textContent = 0; $('dTime').textContent = DUEL_SECONDS;
+  intro.hidden = false; $('target').style.display = 'none';
+  $('duel').hidden = false;
+  T('boss', { open: b.id, ghost: duel.ghost, team: together });
+}
+function finishBoss() {
+  const b = duel.boss;
+  duel.boss = null;
+  if (duel.score > duel.ghost) {
+    (S.bossDone ??= {})[b.id] = today();
+    for (const [k, v] of Object.entries(b.reward)) S.inv[k] = (S.inv[k] || 0) + v;
+    S.stats.bosses = (S.stats.bosses || 0) + 1;
+    buzz('quest');
+    flash(`${b.emoji} Pokonany!`, b.name);
+    say(`Pokonano: ${b.name}.`);
+    log(`Boss pokonany: ${b.name} (${duel.score}:${duel.ghost}). Nagroda: ${costText(b.reward)}, 50 pkt`, false);
+    teamPub({ k: 'boss', boss: b.id });
+    T('boss', { win: b.id, score: duel.score, ghost: duel.ghost });
+  } else {
+    (S.bossCd ??= {})[b.id] = Date.now() + 5 * 60e3;
+    log(`${b.name} obronił się (${duel.score}:${duel.ghost}). Spróbuj za 5 minut.`, true);
+    T('boss', { lose: b.id, score: duel.score, ghost: duel.ghost });
+  }
+  scoreCache.t = 0;
+  save(); render();
+}
+let bossMarkers = null;
+function renderBosses() {
+  if (!mapReady) return;
+  bossMarkers ??= BOSSES.map(b => {
+    const el = document.createElement('div');
+    el.className = 'boss-pin';
+    el.innerHTML = `<span class="face">${b.emoji}</span><span class="tag">${b.name}</span>`;
+    el.addEventListener('click', ev => { ev.stopPropagation(); openBoss(b); });
+    return { b, el, m: new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([b.lng, b.lat]).addTo(map) };
+  });
+  for (const x of bossMarkers) x.el.classList.toggle('done', bossDoneToday(x.b));
+}
+
+// ---------- Skrzynie z wibracją ciepło-zimno ----------
+// W promieniu 150-450 m leżą skrzynie. Im bliżej, tym częściej telefon wibruje, więc można ich szukać z telefonem w kieszeni.
+const CHEST_PICKUP = 25, CHESTS_PER_DAY = 12;
+function spawnChests() {
+  if (!S.pos) return;
+  const now = Date.now();
+  S.chests = (S.chests || []).filter(c => now < c.until && dist(S.pos, [c.lat, c.lng]) < 1500);
+  if (S.chestDay?.date !== today()) S.chestDay = { date: today(), n: 0 };
+  let tries = 0;
+  while (S.chests.length < 3 && S.chestDay.n < CHESTS_PER_DAY && tries++ < 10) {
+    const [lat, lng] = randomNear(S.pos, 150, 450), h = S.hexes[h3.latLngToCell(lat, lng, RES)];
+    if (h?.blocked) continue;
+    S.chests.push({ id: Math.random().toString(36).slice(2, 8), lat, lng, until: now + 2 * H });
+    S.chestDay.n++;
+  }
+}
+function chestReward() {
+  const r = Math.random();
+  if (r < 0.1) return { label: 'legendarna', reward: { monety: 60, slawa: 15, wozy: 2 } };
+  if (r < 0.4) return { label: 'kupiecka', reward: { monety: 25, towary: 15 } };
+  if (r < 0.7) return { label: 'leśna', reward: { monety: 20, drewno: 20 } };
+  return { label: 'złota', reward: { monety: 45 } };
+}
+function checkChests() {
+  if (!S.pos || !S.chests?.length) return;
+  for (const c of [...S.chests]) {
+    if (dist(S.pos, [c.lat, c.lng]) > CHEST_PICKUP) continue;
+    S.chests = S.chests.filter(x => x !== c);
+    const { label, reward } = chestReward();
+    for (const [k, v] of Object.entries(reward)) S.inv[k] = (S.inv[k] || 0) + v;
+    S.stats.chests = (S.stats.chests || 0) + 1;
+    buzz('quest');
+    flash(`Skrzynia ${label}!`, costText(reward));
+    say(`Znaleziono skrzynię ${label}.`);
+    log(`Skrzynia ${label}: ${costText(reward)}`, false);
+    T('chest', { label });
+    scoreCache.t = 0;
+  }
+  spawnChests();
+}
+function nearestChest() {
+  if (!S.pos || !S.chests?.length) return null;
+  let best = null;
+  for (const c of S.chests) { const d = dist(S.pos, [c.lat, c.lng]); if (!best || d < best.d) best = { c, d }; }
+  return best;
+}
+const warmth = d => (d < 40 ? 'gorąco!' : d < 80 ? 'bardzo ciepło' : d < 150 ? 'ciepło' : d < 250 ? 'chłodno' : 'zimno');
+let lastPing = 0;
+// Puls wibracji co 1 s sprawdza, czy pora na kolejne „pyknięcie”.
+function hotColdTick() {
+  if (!S.mode || S.settings?.hotcold === false || !S.settings?.vibe || document.hidden) return;
+  const n = nearestChest();
+  if (!n) return;
+  const every = n.d < 40 ? 1500 : n.d < 80 ? 3000 : n.d < 150 ? 5000 : n.d < 250 ? 9000 : 0;
+  if (!every || Date.now() - lastPing < every) return;
+  lastPing = Date.now();
+  try { navigator.vibrate?.(n.d < 40 ? [70, 50, 70] : n.d < 80 ? [60] : [35]); } catch (e) { /* brak wibracji */ }
+}
+const chestMarkers = {};
+function renderChests() {
+  if (!mapReady) return;
+  const visible = new Set();
+  for (const c of S.chests || []) {
+    // Skrzynię widać na mapie dopiero z bliska: dalej prowadzi wibracja i strzałka na pasku.
+    if (!S.pos || dist(S.pos, [c.lat, c.lng]) > 120) continue;
+    visible.add(c.id);
+    if (!chestMarkers[c.id]) {
+      const el = document.createElement('div');
+      el.className = 'chest-pin';
+      el.textContent = '📦';
+      chestMarkers[c.id] = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([c.lng, c.lat]).addTo(map);
+    }
+  }
+  for (const id of Object.keys(chestMarkers)) if (!visible.has(id)) { chestMarkers[id].remove(); delete chestMarkers[id]; }
+}
+
+// ---------- Seria ----------
+// Kolejne heksy zajęte bez dłuższej przerwy (do 3 min) dają mnożnik: zdobywanie szybciej i premia w monetach.
+const STREAK_GAP = 3 * 60e3;
+const streakActive = () => S.streak && Date.now() - S.streak.last <= STREAK_GAP;
+const streakMult = () => { const n = streakActive() ? S.streak.n : 0; return n >= 10 ? 3 : n >= 6 ? 2 : n >= 3 ? 1.5 : 1; };
+function streakCapture() {
+  const now = Date.now();
+  S.streak = streakActive() ? { n: S.streak.n + 1, last: now } : { n: 1, last: now };
+  S.stats.bestStreak = Math.max(S.stats.bestStreak || 0, S.streak.n);
+  const m = streakMult();
+  if (m > 1) S.inv.monety += Math.round(5 * m);
+  if ([3, 6, 10].includes(S.streak.n)) {
+    buzz('route');
+    flash(`Seria ${S.streak.n}! x${String(m).replace('.', ',')}`, 'idź dalej, nie zatrzymuj się');
+    say(`Seria ${S.streak.n}. Nie zatrzymuj się.`);
+    T('streak', { n: S.streak.n, m });
+  }
+}
+
 // ---------- Ranking okolicy ----------
 function renderRank() {
   const sc = scores();
@@ -1249,7 +1437,8 @@ function renderRank() {
   $('myPoints').innerHTML = `<p>Miejsce <b>${pos}</b> z ${rows.length}.${pos > 1 ? ` Do miejsca wyżej brakuje <b>${rows[pos - 2].total - m.total + 1}</b> pkt.` : ' Prowadzisz w okolicy!'}</p>
     <dl class="kv"><dt>Heksy</dt><dd>${m.hexes} x 10 = ${m.hexes * 10}</dd><dt>Budynki</dt><dd>${m.buildings} poz. x 15 = ${m.buildings * 15}</dd>
     <dt>Spacer</dt><dd>${m.km.toFixed(2)} km x 20 = ${Math.round(m.km * 20)}</dd><dt>Szlaki</dt><dd>${m.routes} x 10 = ${m.routes * 10}</dd>
-    <dt>Pojedynki</dt><dd>${m.duels} x 25 = ${m.duels * 25}</dd></dl>
+    <dt>Pojedynki</dt><dd>${m.duels} x 25 = ${m.duels * 25}</dd>
+    <dt>Bossowie</dt><dd>${m.bosses} x 50 = ${m.bosses * 50}</dd><dt>Skrzynie</dt><dd>${m.chests} x 5 = ${m.chests * 5}</dd></dl>
     <p class="muted">Na razie inni gracze w rankingu są symulowani. Prawdziwy ranking ruszy razem z serwerem gry.</p>`;
 }
 function openRank() { scoreCache.t = 0; renderRank(); $('rank').hidden = false; }
@@ -1336,6 +1525,7 @@ function renderMenu() {
   $('modeTest').classList.toggle('on', S.mode === 'test');
   $('setVibe').checked = !!S.settings.vibe;
   $('setVoice').checked = !!S.settings.voice;
+  $('setHotCold').checked = S.settings.hotcold !== false;
   const st = S.stats, mine = Object.values(S.hexes).filter(h => h.owner === ME).length;
   $('stats').innerHTML = `<dl class="kv">
     <dt>Twoje heksy</dt><dd>${mine}</dd><dt>Przebyty dystans</dt><dd>${(st.meters / 1000).toFixed(2)} km</dd>
@@ -1358,6 +1548,17 @@ function renderChips() {
     const d = direction(S.lastLost.id);
     if (d) out.push(`<button class="qchip lost" data-chip="lost">${d.arrow} Odbij heks: ${d.m} m, ${d.name}</button>`);
   }
+  if (streakActive() && S.streak.n >= 2) {
+    const left = Math.max(0, Math.ceil((STREAK_GAP - (now - S.streak.last)) / 1000));
+    out.push(`<button class="qchip streak" data-chip="streak">🔥 Seria ${S.streak.n} · x${String(streakMult()).replace('.', ',')} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}</button>`);
+  }
+  const nb = nearestBoss();
+  if (nb && nb.d <= 1500) {
+    const d = direction2([nb.b.lat, nb.b.lng]);
+    out.push(`<button class="qchip boss${nb.d <= BOSS_RANGE ? ' near' : ''}" data-chip="boss">${nb.b.emoji} ${nb.b.name}: ${nb.d <= BOSS_RANGE ? 'jesteś przy nim, walcz!' : `${d.arrow} ${d.m} m`}</button>`);
+  }
+  const nc = nearestChest();
+  if (nc) { const d = direction2([nc.c.lat, nc.c.lng]); out.push(`<button class="qchip chest" data-chip="chest">📦 Skrzynia: ${d.arrow} ${d.m} m, ${warmth(nc.d)}</button>`); }
   if (S.team) {
     const m = nearestMate();
     out.push(`<button class="qchip team${m && m.d <= 40 ? ' near' : ''}" data-chip="team">Drużyna ${S.team.code}: ${m ? `${m.emoji || ''} ${m.name} ${Math.round(m.d)} m${m.d <= 40 ? ', razem +20%' : ''}` : Object.keys(mates).length ? 'członkowie poza zasięgiem' : 'czekam na członków'}</button>`);
@@ -1444,6 +1645,8 @@ function renderMap() {
   map.getSource('cargo').setData({ type: 'FeatureCollection', features: lines });
   map.setFilter('hex-sel', ['==', ['get', 'id'], sel || S.cur || '']);
   renderMates();
+  renderBosses();
+  renderChests();
   map.setFilter('hex-lost', ['==', ['get', 'id'], S.lastLost?.id || '']);
   renderWalkers();
 }
@@ -1509,6 +1712,9 @@ function bindUi() {
     const c = b.dataset.chip;
     if (c === 'quest') { const q = QUESTS[S.q]; if (q) toast(q.hint); }
     else if (c === 'lost') showHex(S.lastLost?.id);
+    else if (c === 'boss') { const nb = nearestBoss(); if (nb && nb.d <= BOSS_RANGE) openBoss(nb.b); else if (nb) { followOn = false; map.easeTo({ center: [nb.b.lng, nb.b.lat] }); toast(`${nb.b.emoji} ${nb.b.name}: ${nb.b.lore}`); } }
+    else if (c === 'chest') toast('Skrzynię szukasz na „ciepło-zimno”: im bliżej, tym częściej telefon wibruje. Podejdź na 25 m, żeby ją otworzyć.');
+    else if (c === 'streak') toast('Seria: zajmuj kolejne heksy bez przerwy dłuższej niż 3 minuty. Od 3 heksów x1,5, od 6 x2, od 10 x3.');
     else if (c === 'team') { $('menu').hidden = false; renderMenu(); }
     else if (c === 'install') { S.installHide = true; doInstall(); }
     else if (c === 'task') showHex((S.tasks || []).find(t => Date.now() < t.until && S.hexes[t.id]?.owner === ME)?.id);
@@ -1539,6 +1745,7 @@ function bindUi() {
   $('tnoteAdd').onclick = () => { const v = $('tnote').value.trim(); if (!v) return; T('note', v); $('tnote').value = ''; toast('Notatka zapisana w danych testu.'); renderTinfo(); };
   $('photoInput').addEventListener('change', e => onPhoto(e.target.files[0]));
   $('setVibe').onchange = e => { S.settings.vibe = e.target.checked; save(); buzz('capture'); };
+  $('setHotCold').onchange = e => { S.settings.hotcold = e.target.checked; save(); };
   $('setVoice').onchange = e => { S.settings.voice = e.target.checked; save(); say('Komunikaty głosowe włączone.'); };
   $('menuBtn').onclick = () => { $('menu').hidden = false; renderMenu(); };
   $('menuClose').onclick = () => { $('menu').hidden = true; };
@@ -1575,6 +1782,8 @@ function main() {
   window.addEventListener('unhandledrejection', e => T('error', String(e.reason?.message || e.reason)));
   window.addEventListener('pagehide', saveTlog);
   setInterval(snapshot, 60e3);
+  setInterval(hotColdTick, 1000);
+  setInterval(() => { spawnChests(); renderChips(); }, 15e3);
   S.pid ??= Math.random().toString(36).slice(2, 10);
   const inviteCode = new URLSearchParams(location.search).get('druzyna');
   if (inviteCode && (!S.team || S.team.code !== inviteCode.toUpperCase())) {

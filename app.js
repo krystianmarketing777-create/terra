@@ -841,7 +841,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -1130,6 +1130,26 @@ async function invite() {
     await navigator.clipboard.writeText(`${text} ${GAME_URL}`);
     toast('Skopiowano zaproszenie. Wklej je w komunikatorze.');
   } catch (e) { /* anulowane */ }
+}
+
+// ---------- Nowa wersja gry ----------
+// GitHub Pages każe przeglądarce trzymać stronę do 10 min, więc gra sama sprawdza, czy jest nowsza wersja.
+const LOADED_V = Number((document.querySelector('script[src*="app.js?v="]')?.src.match(/v=(\d+)/) || [])[1] || 0);
+async function checkUpdate() {
+  try {
+    const t = await fetch('index.html?check=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
+    const v = Number((t.match(/app\.js\?v=(\d+)/) || [])[1] || 0);
+    if (LOADED_V && v > LOADED_V) showUpdate(v);
+  } catch (e) { /* offline */ }
+}
+function showUpdate(v) {
+  if ($('update')) return;
+  const b = document.createElement('button');
+  b.id = 'update'; b.className = 'update-bar';
+  b.textContent = 'Jest nowa wersja gry. Dotknij, żeby odświeżyć.';
+  b.onclick = () => { T('update', v); location.href = location.pathname + '?v=' + v; };
+  document.body.appendChild(b);
+  buzz('toll');
 }
 
 // ---------- Drużyna (test na publicznym serwerze wiadomości ntfy.sh) ----------
@@ -1919,6 +1939,7 @@ function bindUi() {
     if (document.hidden) return;
     tick();
     if (S.mode === 'gps') keepAwake(true);
+    checkUpdate();
   });
 }
 
@@ -1929,6 +1950,8 @@ function main() {
   window.addEventListener('pagehide', saveTlog);
   setInterval(snapshot, 60e3);
   setInterval(hotColdTick, 1000);
+  setInterval(checkUpdate, 60e3);
+  setTimeout(checkUpdate, 5000);
   setInterval(() => { spawnChests(); renderChips(); }, 15e3);
   S.pid ??= Math.random().toString(36).slice(2, 10);
   const inviteCode = new URLSearchParams(location.search).get('druzyna');

@@ -832,7 +832,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -1487,6 +1487,8 @@ function initMap() {
     render();
   });
   map.on('dragstart', () => { followOn = false; });
+  // Heksy wczytują się też tam, gdzie gracz przesunie mapę (np. podgląd Rynku przed spacerem).
+  map.on('moveend', () => { if (map.getZoom() >= 13.5) { const c = map.getCenter(); ensureArea(c.lat, c.lng); } });
   map.on('idle', classifyVisible);
 }
 

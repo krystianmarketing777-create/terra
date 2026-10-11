@@ -1,7 +1,7 @@
 // Service worker: zawsze najpierw świeża wersja z sieci (z pominięciem 10-minutowej pamięci GitHub Pages),
 // zapisana kopia tylko jako zapas offline.
-const CACHE = 'terra-v20';
-const SHELL = ['./', 'index.html', 'style.css?v=20', 'app.js?v=20', 'icon.svg', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'terra-v21';
+const SHELL = ['./', 'index.html', 'style.css?v=21', 'app.js?v=21', 'icon.svg', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -120,8 +120,8 @@ function fresh() {
     inv: { ...STARTER },
     hexes: {}, areas: [], cargo: null, bots: {},
     stats: { meters: 0, captured: 0, routes: 0, routeIncome: 0, tollPaid: 0, tollEarned: 0, duelsWon: 0, duelsLost: 0, built: 0 },
-    lastTick: Date.now(), log: [], tune: 6, seat: null, seatShield: 0, profile: null,
-    settings: { vibe: true, voice: false }, q: 0, tasks: [], lastLost: null,
+    lastTick: Date.now(), log: [], tune: 7, seat: null, seatShield: 0, profile: null,
+    settings: { vibe: true, voice: true }, q: 0, tasks: [], lastLost: null,
   };
 }
 function load() {
@@ -171,6 +171,8 @@ if (S.tune < 5) {
   S.tune = 5;
 }
 if (S.tune < 6) { migrateBots(); S.profile ??= null; S.tune = 6; }
+// Głos włączony domyślnie: gra ma się dać prowadzić bez patrzenia w telefon.
+if (S.tune < 7) { S.settings.voice = true; S.tune = 7; }
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
@@ -478,10 +480,28 @@ function buzz(kind) {
   if (!S.settings?.vibe) return;
   try { navigator.vibrate?.(BUZZ[kind]); } catch (e) { /* brak wibracji */ }
 }
-function say(text) {
-  if (!S.settings?.voice || !window.speechSynthesis) return;
+// Głos: Chrome na Androidzie pozwala mówić dopiero po pierwszym dotknięciu strony, więc odblokowujemy mowę przy pierwszym dotknięciu.
+let plVoice = null, speechUnlocked = false;
+function pickVoice() {
+  const vs = window.speechSynthesis?.getVoices() || [];
+  plVoice = vs.find(v => /^pl/i.test(v.lang) && /google/i.test(v.name)) || vs.find(v => /^pl/i.test(v.lang)) || null;
+}
+if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function unlockSpeech() {
+  if (speechUnlocked || !window.speechSynthesis) return;
+  speechUnlocked = true;
+  const u = new SpeechSynthesisUtterance(' ');
+  u.volume = 0;
+  speechSynthesis.speak(u);
+}
+function say(text, force) {
+  if ((!S.settings?.voice && !force) || !window.speechSynthesis) return;
+  if (speechSynthesis.pending) speechSynthesis.cancel(); // nie kolejkuj zaległych komunikatów
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'pl-PL';
+  if (plVoice) u.voice = plVoice;
+  u.rate = 1.05;
+  u.onerror = e => T('voice', e.error || 'error');
   speechSynthesis.speak(u);
 }
 let flashTimer = null;
@@ -841,7 +861,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v20';
+const APP_VERSION = 'v21';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -1911,7 +1931,9 @@ function bindUi() {
   $('photoInput').addEventListener('change', e => onPhoto(e.target.files[0]));
   $('setVibe').onchange = e => { S.settings.vibe = e.target.checked; save(); buzz('capture'); };
   $('setHotCold').onchange = e => { S.settings.hotcold = e.target.checked; save(); };
-  $('setVoice').onchange = e => { S.settings.voice = e.target.checked; save(); say('Komunikaty głosowe włączone.'); };
+  $('setVoice').onchange = e => { S.settings.voice = e.target.checked; save(); if (e.target.checked) say('Komunikaty głosowe włączone.'); };
+  $('voiceTest').onclick = () => { unlockSpeech(); say(plVoice ? 'Cześć! Tak brzmi Terra na spacerze.' : 'Terra mówi. Brak polskiego głosu w telefonie.', true); T('voice', plVoice ? plVoice.name : 'no-pl-voice'); };
+  document.addEventListener('pointerdown', unlockSpeech, { once: true, capture: true });
   $('menuBtn').onclick = () => { $('menu').hidden = false; renderMenu(); };
   $('menuClose').onclick = () => { $('menu').hidden = true; };
   $('modeGps').onclick = () => { setMode('gps'); renderMenu(); };

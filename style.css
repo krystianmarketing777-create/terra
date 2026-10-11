@@ -162,3 +162,14 @@ ul.team { margin: 4px 0 8px; padding-left: 18px; }
 .boss-pin .tag { margin-top: 2px; background: #5f3dc4; color: #fff; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
 .boss-pin.done { opacity: .45; filter: grayscale(1); }
 .chest-pin { font-size: 26px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.4)); }
+
+/* Kompaktowy układ na telefonie: surowce w jednym przewijanym rzędzie, mniejsze paski */
+#top { align-items: flex-start; }
+#inv { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 6px; -webkit-overflow-scrolling: touch; }
+#inv::-webkit-scrollbar { display: none; }
+#inv .chip { flex: none; font-size: 12px; padding: 3px 9px; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+#menuBtn, #pocketBtn, #rankBtn { width: 36px; height: 36px; font-size: 17px; flex: none; }
+#chips { gap: 4px; }
+.qchip { font-size: 12px; padding: 4px 10px; border-radius: 10px; max-width: calc(100% - 50px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qchip.more { background: #1d2129; color: #fff; font-weight: 700; }
+#gps { bottom: calc(46vh + 8px); font-size: 11px; padding: 3px 8px; }

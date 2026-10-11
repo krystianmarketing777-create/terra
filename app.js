@@ -841,7 +841,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -1673,37 +1673,44 @@ function renderMenu() {
   $('log').innerHTML =S.log.slice(0, 30).map(e => `<li><span class="muted">${fmtTime(e.t)}</span> ${e.msg}</li>`).join('') || '<li class="muted">pusto</li>';
 }
 
+let chipsOpen = false;
 function renderChips() {
   const out = [], now = Date.now(), q = QUESTS[S.q];
+  const add = (prio, html) => out.push({ prio, html });
   if (q) {
     const [have, need] = q.prog(S);
-    out.push(`<button class="qchip" data-chip="quest"><b>Zadanie:</b> ${q.title} (${Math.min(have, need)}/${need})</button>`);
+    add(6, `<button class="qchip" data-chip="quest"><b>Zadanie:</b> ${q.title} (${Math.min(have, need)}/${need})</button>`);
   }
   const L = S.lastLost;
   if (L && (now - L.t > 2 * H || !S.hexes[L.id] || S.hexes[L.id].owner === ME)) S.lastLost = null;
   if (S.lastLost) {
     const d = direction(S.lastLost.id);
-    if (d) out.push(`<button class="qchip lost" data-chip="lost">${d.arrow} Odbij heks: ${d.m} m, ${d.name}</button>`);
+    if (d) add(1, `<button class="qchip lost" data-chip="lost">${d.arrow} Odbij heks: ${d.m} m, ${d.name}</button>`);
   }
   if (streakActive() && S.streak.n >= 2) {
     const left = Math.max(0, Math.ceil((STREAK_GAP - (now - S.streak.last)) / 1000));
-    out.push(`<button class="qchip streak" data-chip="streak">🔥 Seria ${S.streak.n} · x${String(streakMult()).replace('.', ',')} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}</button>`);
+    add(3, `<button class="qchip streak" data-chip="streak">🔥 Seria ${S.streak.n} · x${String(streakMult()).replace('.', ',')} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}</button>`);
   }
   const nb = nearestBoss();
   if (nb && nb.d <= 1500) {
     const d = direction2([nb.b.lat, nb.b.lng]);
-    out.push(`<button class="qchip boss${nb.d <= BOSS_RANGE ? ' near' : ''}" data-chip="boss">${nb.b.emoji} ${nb.b.name}: ${nb.d <= BOSS_RANGE ? 'jesteś przy nim, walcz!' : `${d.arrow} ${d.m} m`}</button>`);
+    add(nb.d <= BOSS_RANGE ? 0 : 2, `<button class="qchip boss${nb.d <= BOSS_RANGE ? ' near' : ''}" data-chip="boss">${nb.b.emoji} ${nb.b.name}: ${nb.d <= BOSS_RANGE ? 'jesteś przy nim, walcz!' : `${d.arrow} ${d.m} m`}</button>`);
   }
   const nc = nearestChest();
-  if (nc) { const d = direction2([nc.c.lat, nc.c.lng]); out.push(`<button class="qchip chest" data-chip="chest">📦 Skrzynia: ${d.arrow} ${d.m} m, ${warmth(nc.d)}</button>`); }
+  if (nc) { const d = direction2([nc.c.lat, nc.c.lng]); add(4, `<button class="qchip chest" data-chip="chest">📦 Skrzynia: ${d.arrow} ${d.m} m, ${warmth(nc.d)}</button>`); }
   if (S.team) {
     const m = nearestMate();
-    out.push(`<button class="qchip team${m && m.d <= 40 ? ' near' : ''}" data-chip="team">Drużyna ${S.team.code}: ${m ? `${m.emoji || ''} ${m.name} ${Math.round(m.d)} m${m.d <= 40 ? ', razem +20%' : ''}` : Object.keys(mates).length ? 'członkowie poza zasięgiem' : 'czekam na członków'}</button>`);
+    add(5, `<button class="qchip team${m && m.d <= 40 ? ' near' : ''}" data-chip="team">Drużyna ${S.team.code}: ${m ? `${m.emoji || ''} ${m.name} ${Math.round(m.d)} m${m.d <= 40 ? ', razem +20%' : ''}` : Object.keys(mates).length ? 'członkowie poza zasięgiem' : 'czekam na członków'}</button>`);
   }
   const tasks = (S.tasks || []).filter(t => now < t.until && S.hexes[t.id]?.owner === ME);
-  if (tasks.length) out.push(`<button class="qchip task" data-chip="task">Zadania ze zdjęciem: ${tasks.length}</button>`);
-  if (canInstall() && S.stats.captured >= 1 && !S.installHide) out.push('<button class="qchip install" data-chip="install">Dodaj Terrę do ekranu głównego (1 dotknięcie)</button>');
-  const html = out.join(''), el = $('chips');
+  if (tasks.length) add(7, `<button class="qchip task" data-chip="task">Zadania ze zdjęciem: ${tasks.length}</button>`);
+  if (canInstall() && S.stats.captured >= 1 && !S.installHide) add(8, '<button class="qchip install" data-chip="install">Dodaj Terrę do ekranu głównego (1 dotknięcie)</button>');
+  out.sort((a, b) => a.prio - b.prio);
+  // Boss tuż obok zawsze na górze, bo trzeba w niego dotknąć.
+  const shown = chipsOpen ? out : out.slice(0, 3);
+  let html = shown.map(x => x.html).join('');
+  if (out.length > 3) html += `<button class="qchip more" data-chip="more">${chipsOpen ? 'zwiń' : `+${out.length - 3}`}</button>`;
+  const el = $('chips');
   if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
   el.style.top = Math.round($('top').getBoundingClientRect().bottom + 2) + 'px';
 }
@@ -1847,6 +1854,7 @@ function bindUi() {
   $('chips').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     const c = b.dataset.chip;
+    if (c === 'more') { chipsOpen = !chipsOpen; renderChips(); return; }
     if (c === 'quest') { const q = QUESTS[S.q]; if (q) toast(q.hint); }
     else if (c === 'lost') showHex(S.lastLost?.id);
     else if (c === 'boss') { const nb = nearestBoss(); if (nb && nb.d <= BOSS_RANGE) openBoss(nb.b); else if (nb) { followOn = false; map.easeTo({ center: [nb.b.lng, nb.b.lat] }); toast(`${nb.b.emoji} ${nb.b.name}: ${nb.b.lore}`); } }

@@ -4,4 +4,5 @@ const FILES = ['index.html', 'app.js', 'style.css', 'sw.js', 'manifest.webmanife
 rmSync('www', { recursive: true, force: true });
 mkdirSync('www');
 for (const f of FILES) cpSync(f, `www/${f}`);
+cpSync('audio', 'www/audio', { recursive: true });
 console.log('www/ gotowe:', FILES.length, 'plików');

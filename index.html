@@ -16,7 +16,7 @@
 <meta property="og:url" content="https://krystianmarketing777-create.github.io/terra/">
 <meta property="og:type" content="website">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=21">
+<link rel="stylesheet" href="style.css?v=22">
 </head>
 <body>
 <header id="top">
@@ -77,7 +77,9 @@
     <label class="row"><input type="checkbox" id="setVibe"> Wibracje (zdobycie, utrata, myto, szlak)</label>
     <label class="row"><input type="checkbox" id="setHotCold"> Wibracja ciepło-zimno przy szukaniu skrzyń</label>
     <label class="row"><input type="checkbox" id="setVoice"> Komunikaty głosowe (zdobycze, bossowie, skrzynie, seria)</label>
-    <button id="voiceTest" class="btn">Sprawdź głos</button>
+    <label class="row"><input type="checkbox" id="setSound"> Dźwięki gry</label>
+    <button id="voiceTest" class="btn">Sprawdź dźwięk i głos</button>
+    <p id="audioDiag" class="muted"></p>
     <h3>Drużyna</h3>
     <div id="teamBox"></div>
     <p class="muted">W drużynie widzicie się na mapie, zdobyty teren jest wspólny i nie wypieracie się nawzajem. Idąc obok siebie (do 40 m) zdobywacie o 20% szybciej. W wersji testowej pozycje drużyny przechodzą przez publiczny serwer wiadomości ntfy.sh pod losowym kodem drużyny.</p>
@@ -156,6 +158,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
-<script src="app.js?v=21"></script>
+<script src="app.js?v=22"></script>
 </body>
 </html>

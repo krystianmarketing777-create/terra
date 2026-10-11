@@ -120,8 +120,8 @@ function fresh() {
     inv: { ...STARTER },
     hexes: {}, areas: [], cargo: null, bots: {},
     stats: { meters: 0, captured: 0, routes: 0, routeIncome: 0, tollPaid: 0, tollEarned: 0, duelsWon: 0, duelsLost: 0, built: 0 },
-    lastTick: Date.now(), log: [], tune: 7, seat: null, seatShield: 0, profile: null,
-    settings: { vibe: true, voice: true }, q: 0, tasks: [], lastLost: null,
+    lastTick: Date.now(), log: [], tune: 8, seat: null, seatShield: 0, profile: null,
+    settings: { vibe: true, voice: true, sound: true }, q: 0, tasks: [], lastLost: null,
   };
 }
 function load() {
@@ -173,6 +173,7 @@ if (S.tune < 5) {
 if (S.tune < 6) { migrateBots(); S.profile ??= null; S.tune = 6; }
 // Głos włączony domyślnie: gra ma się dać prowadzić bez patrzenia w telefon.
 if (S.tune < 7) { S.settings.voice = true; S.tune = 7; }
+if (S.tune < 8) { S.settings.sound = true; S.settings.voice = true; S.tune = 8; }
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
@@ -425,7 +426,7 @@ function changeOwner(id, h, from, to, cause) {
       flash('Twoja Siedziba!', label);
     } else flash('Heks zdobyty!', label);
     buzz('capture');
-    say(`Heks zdobyty. ${label}.`);
+    announce(buildingNote.includes('Siedzib') ? 'seat' : 'capture');
     log(`Heks zdobyty (${label})${loot ? `, łup +${loot} ${RESOURCES[resOf(h)].toLowerCase()}` : ''}${buildingNote}`);
     if (S.lastLost?.id === id) S.lastLost = null;
     teamPub({ k: 'cap', cell: id });
@@ -439,7 +440,7 @@ function changeOwner(id, h, from, to, cause) {
     S.lastLost = { id, t: now };
     buzz('lost');
     notify('Heks utracony', `${to ? owner(to).name + ' przejmuje Twój teren' : 'Wpływ wygasł'}${d ? `: ${d.m} m, ${d.name}` : ''}`);
-    say(`Utracono heks${to ? ' na rzecz ' + owner(to).name : ''}. ${d ? d.m + ' metrów, ' + d.name : ''}.`);
+    announce('lost');
     log(`Heks utracony${to ? ', przejmuje go ' + owner(to).name : ', wpływ wygasł'}${where}${buildingNote}`, true);
   }
 }
@@ -480,29 +481,75 @@ function buzz(kind) {
   if (!S.settings?.vibe) return;
   try { navigator.vibrate?.(BUZZ[kind]); } catch (e) { /* brak wibracji */ }
 }
-// Głos: Chrome na Androidzie pozwala mówić dopiero po pierwszym dotknięciu strony, więc odblokowujemy mowę przy pierwszym dotknięciu.
-let plVoice = null, speechUnlocked = false;
-function pickVoice() {
-  const vs = window.speechSynthesis?.getVoices() || [];
-  plVoice = vs.find(v => /^pl/i.test(v.lang) && /google/i.test(v.name)) || vs.find(v => /^pl/i.test(v.lang)) || null;
+// ---------- Dźwięk: efekty i nagrany głos ----------
+// Synteza mowy w Chrome na Androidzie bywa niema, więc komunikaty to gotowe nagrania (audio/*.wav)
+// odtwarzane przez Web Audio, a efekty są generowane w grze. Dźwięk odblokowuje się przy dotknięciu ekranu.
+let actx = null;
+const clipBuf = {}, clipLoading = {};
+let voiceBusyUntil = 0;
+function audioUnlock() {
+  try {
+    actx ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) { T('audio', 'ctx-error'); return; }
+  ['capture', 'lost', 'chest', 'hot', 'bosswin', 'quest'].forEach(loadClip);
 }
-if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
-function unlockSpeech() {
-  if (speechUnlocked || !window.speechSynthesis) return;
-  speechUnlocked = true;
-  const u = new SpeechSynthesisUtterance(' ');
-  u.volume = 0;
-  speechSynthesis.speak(u);
+function loadClip(k) {
+  if (clipBuf[k]) return Promise.resolve(clipBuf[k]);
+  if (!actx) return Promise.resolve(null);
+  clipLoading[k] ??= fetch('audio/' + k + '.wav').then(r => r.arrayBuffer()).then(b => actx.decodeAudioData(b))
+    .then(buf => (clipBuf[k] = buf)).catch(() => { T('audio', 'load-' + k); delete clipLoading[k]; return null; });
+  return clipLoading[k];
 }
-function say(text, force) {
-  if ((!S.settings?.voice && !force) || !window.speechSynthesis) return;
-  if (speechSynthesis.pending) speechSynthesis.cancel(); // nie kolejkuj zaległych komunikatów
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'pl-PL';
-  if (plVoice) u.voice = plVoice;
-  u.rate = 1.05;
-  u.onerror = e => T('voice', e.error || 'error');
-  speechSynthesis.speak(u);
+async function voiceClip(k) {
+  if (!S.settings?.voice || !actx) return;
+  const buf = await loadClip(k);
+  if (!buf) return;
+  const at = Math.max(actx.currentTime + 0.05, voiceBusyUntil);
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  src.connect(actx.destination);
+  src.start(at);
+  voiceBusyUntil = at + buf.duration + 0.1;
+}
+function tone(seq) {
+  if (S.settings?.sound === false || !actx) return;
+  let t = actx.currentTime + 0.02;
+  for (const [f, d, type = 'sine', vol = 0.3] of seq) {
+    if (f) {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      o.connect(g).connect(actx.destination);
+      o.start(t); o.stop(t + d + 0.02);
+    }
+    t += d;
+  }
+  voiceBusyUntil = Math.max(voiceBusyUntil, t);
+}
+const SFX = {
+  capture: [[660, 0.09], [880, 0.09], [1320, 0.2]],
+  lost: [[440, 0.18, 'triangle'], [330, 0.18, 'triangle'], [220, 0.35, 'triangle']],
+  toll: [[520, 0.06, 'square', 0.12]],
+  chest: [[988, 0.07], [1319, 0.07], [1568, 0.07], [2093, 0.22]],
+  boss: [[523, 0.12], [659, 0.12], [784, 0.12], [1047, 0.4]],
+  streak: [[880, 0.07], [0, 0.03], [880, 0.07], [0, 0.03], [1175, 0.18]],
+  quest: [[784, 0.1], [988, 0.1], [1175, 0.1], [1568, 0.28]],
+  route: [[587, 0.1], [740, 0.1], [880, 0.22]],
+  hot: [[1200, 0.06, 'sine', 0.18]],
+};
+const ANNOUNCE_SFX = { capture: 'capture', seat: 'capture', lost: 'lost', quest: 'quest', route: 'route', bosswin: 'boss', teamwin: 'boss',
+  bosslose: 'lost', chest: 'chest', streak3: 'streak', streak6: 'streak', streak10: 'streak', teamfight: 'quest', teamjoin: 'quest',
+  build: 'quest', bossnear: 'boss', hot: 'hot', test: 'quest', on: 'quest' };
+// Komunikat zdarzenia: krótki efekt i (jeśli włączony) nagrany głos.
+function announce(k) {
+  if (SFX[ANNOUNCE_SFX[k]]) tone(SFX[ANNOUNCE_SFX[k]]);
+  voiceClip(k);
+}
+function audioDiag() {
+  return `Dźwięk: ${actx ? actx.state : 'jeszcze nieaktywny (dotknij ekranu)'}, nagrania wczytane: ${Object.keys(clipBuf).length}`;
 }
 let flashTimer = null;
 function flash(title, sub) {
@@ -526,7 +573,7 @@ function checkQuests() {
     S.q++;
     buzz('quest');
     flash('Zadanie wykonane!', q.title);
-    say(`Zadanie wykonane: ${q.title}.`);
+    announce('quest');
     log(`Zadanie wykonane: ${q.title}. Nagroda: ${costText(q.reward)}`, false);
     q = QUESTS[S.q];
   }
@@ -763,7 +810,7 @@ function onEnter(id, h) {
   if (isBot(h.owner) && (!h.tollAt || now - h.tollAt > DAY)) {
     const paid = Math.min(S.inv.monety, tollOf(h));
     S.inv.monety -= paid; S.stats.tollPaid += paid; h.tollAt = now;
-    if (paid > 0) { buzz('toll'); toast(`Myto dla: ${owner(h.owner).name}, -${paid} monet`); }
+    if (paid > 0) { buzz('toll'); tone(SFX.toll); toast(`Myto dla: ${owner(h.owner).name}, -${paid} monet`); }
   }
 }
 
@@ -792,7 +839,7 @@ function route(id, h, now) {
       log(`Szlak handlowy ${RESOURCES[c.res]} → ${RESOURCES[res]}: ${Math.round(c.m)} m, +${pay} monet${bonus}`, false);
       buzz('route');
       flash(`Szlak handlowy +${pay}`, `${RESOURCES[c.res]} → ${RESOURCES[res]}`);
-      say(`Szlak handlowy. Plus ${pay} monet.`);
+      announce('route');
       S.cargo = { from: id, res, since: now, m: 0 };
       return;
     }
@@ -861,7 +908,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v21';
+const APP_VERSION = 'v22';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -986,6 +1033,7 @@ function build(t, id) {
   S.stats.built++;
   buzz('capture');
   flash(`${BUILD[t].label} poz. ${l}`, 'zbudowano');
+  announce('build');
   log(`Zbudowano: ${BUILD[t].label} poz. ${l}`, false);
   save(); render();
 }
@@ -1204,6 +1252,7 @@ function onTeamMsg(d) {
   if (d.lat != null) { m.lat = d.lat; m.lng = d.lng; m.t = Date.now(); }
   if (isNew) {
     log(`${d.emoji} ${d.name} jest w Twojej drużynie`, true);
+    announce('teamjoin');
     buzz('quest');
     T('team', { mate: d.name });
     if (d.k === 'hello') teamPub({ k: 'pos', lat: S.pos ? r5(S.pos[0]) : null, lng: S.pos ? r5(S.pos[1]) : null });
@@ -1350,13 +1399,14 @@ function finishBoss() {
     S.stats.bosses = (S.stats.bosses || 0) + 1;
     buzz('quest');
     flash(`${b.emoji} Pokonany!`, b.name);
-    say(`Pokonano: ${b.name}.`);
+    announce('bosswin');
     log(`Boss pokonany: ${b.name} (${duel.score}:${duel.ghost}). Nagroda: ${costText(b.reward)}, 50 pkt`, false);
     teamPub({ k: 'boss', boss: b.id });
     T('boss', { win: b.id, score: duel.score, ghost: duel.ghost });
   } else {
     (S.bossCd ??= {})[b.id] = Date.now() + 5 * 60e3;
     log(`${b.name} obronił się (${duel.score}:${duel.ghost}). Spróbuj za 5 minut.`, true);
+    announce('bosslose');
     T('boss', { lose: b.id, score: duel.score, ghost: duel.ghost });
   }
   scoreCache.t = 0;
@@ -1408,7 +1458,7 @@ function checkChests() {
     S.stats.chests = (S.stats.chests || 0) + 1;
     buzz('quest');
     flash(`Skrzynia ${label}!`, costText(reward));
-    say(`Znaleziono skrzynię ${label}.`);
+    announce('chest');
     log(`Skrzynia ${label}: ${costText(reward)}`, false);
     T('chest', { label });
     scoreCache.t = 0;
@@ -1465,7 +1515,7 @@ function streakCapture() {
   if ([3, 6, 10].includes(S.streak.n)) {
     buzz('route');
     flash(`Seria ${S.streak.n}! x${String(m).replace('.', ',')}`, 'idź dalej, nie zatrzymuj się');
-    say(`Seria ${S.streak.n}. Nie zatrzymuj się.`);
+    announce('streak' + S.streak.n);
     T('streak', { n: S.streak.n, m });
   }
 }
@@ -1524,7 +1574,7 @@ function onFightInvite(d) {
   if (!near) { log(`${d.emoji} ${d.name} walczy z bossem ${b.name}. Podejdź bliżej, żeby dołączyć następnym razem.`, true); return; }
   const f = fights[d.fid] = { fid: d.fid, boss: d.boss, ghost: d.ghost, startAt: d.startAt, leader: false, leaderPid: d.pid, leaderName: d.name };
   buzz('quest');
-  say(`${d.name} zaprasza do walki z bossem.`);
+  announce('teamfight');
   duel.boss = b; duel.id = null; duel.score = 0; duel.ghost = d.ghost; duel.team = null;
   const intro = $('dIntro'), ps = intro.querySelectorAll('p');
   intro.querySelector('h2').textContent = `${b.emoji} ${d.name} wzywa do walki!`;
@@ -1584,7 +1634,7 @@ function applyFightResult(f, r) {
     S.stats.teamFights = (S.stats.teamFights || 0) + 1;
     buzz('quest');
     flash(`${b.emoji} Pokonany razem!`, `${r.total}:${r.ghost} · ${r.names.join(' + ')}`);
-    say(`Razem pokonaliście: ${b.name}.`);
+    announce('teamwin');
     log(`Walka drużynowa wygrana: ${b.name} ${r.total}:${r.ghost} (${r.names.join(', ')}). Nagroda: ${costText(reward)}, 50 pkt`, false);
   } else {
     (S.bossCd ??= {})[b.id] = Date.now() + 5 * 60e3;
@@ -1702,6 +1752,8 @@ function renderMenu() {
   $('modeTest').classList.toggle('on', S.mode === 'test');
   $('setVibe').checked = !!S.settings.vibe;
   $('setVoice').checked = !!S.settings.voice;
+  $('setSound').checked = S.settings.sound !== false;
+  $('audioDiag').textContent = audioDiag();
   $('setHotCold').checked = S.settings.hotcold !== false;
   const st = S.stats, mine = Object.values(S.hexes).filter(h => h.owner === ME).length;
   $('stats').innerHTML = `<dl class="kv">
@@ -1713,7 +1765,7 @@ function renderMenu() {
   $('log').innerHTML =S.log.slice(0, 30).map(e => `<li><span class="muted">${fmtTime(e.t)}</span> ${e.msg}</li>`).join('') || '<li class="muted">pusto</li>';
 }
 
-let chipsOpen = false;
+let chipsOpen = false, lastNearBoss = null, lastHotChest = null;
 function renderChips() {
   const out = [], now = Date.now(), q = QUESTS[S.q];
   const add = (prio, html) => out.push({ prio, html });
@@ -1732,11 +1784,13 @@ function renderChips() {
     add(3, `<button class="qchip streak" data-chip="streak">🔥 Seria ${S.streak.n} · x${String(streakMult()).replace('.', ',')} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}</button>`);
   }
   const nb = nearestBoss();
+  if (nb && nb.d <= BOSS_RANGE && lastNearBoss !== nb.b.id) { lastNearBoss = nb.b.id; announce('bossnear'); }
   if (nb && nb.d <= 1500) {
     const d = direction2([nb.b.lat, nb.b.lng]);
     add(nb.d <= BOSS_RANGE ? 0 : 2, `<button class="qchip boss${nb.d <= BOSS_RANGE ? ' near' : ''}" data-chip="boss">${nb.b.emoji} ${nb.b.name}: ${nb.d <= BOSS_RANGE ? 'jesteś przy nim, walcz!' : `${d.arrow} ${d.m} m`}</button>`);
   }
   const nc = nearestChest();
+  if (nc && nc.d < 40 && lastHotChest !== nc.c.id) { lastHotChest = nc.c.id; announce('hot'); }
   if (nc) { const d = direction2([nc.c.lat, nc.c.lng]); add(4, `<button class="qchip chest" data-chip="chest">📦 Skrzynia: ${d.arrow} ${d.m} m, ${warmth(nc.d)}</button>`); }
   if (S.team) {
     const m = nearestMate();
@@ -1931,9 +1985,16 @@ function bindUi() {
   $('photoInput').addEventListener('change', e => onPhoto(e.target.files[0]));
   $('setVibe').onchange = e => { S.settings.vibe = e.target.checked; save(); buzz('capture'); };
   $('setHotCold').onchange = e => { S.settings.hotcold = e.target.checked; save(); };
-  $('setVoice').onchange = e => { S.settings.voice = e.target.checked; save(); if (e.target.checked) say('Komunikaty głosowe włączone.'); };
-  $('voiceTest').onclick = () => { unlockSpeech(); say(plVoice ? 'Cześć! Tak brzmi Terra na spacerze.' : 'Terra mówi. Brak polskiego głosu w telefonie.', true); T('voice', plVoice ? plVoice.name : 'no-pl-voice'); };
-  document.addEventListener('pointerdown', unlockSpeech, { once: true, capture: true });
+  $('setVoice').onchange = e => { S.settings.voice = e.target.checked; save(); if (e.target.checked) { audioUnlock(); announce('on'); } };
+  $('setSound').onchange = e => { S.settings.sound = e.target.checked; save(); audioUnlock(); if (e.target.checked) tone(SFX.capture); };
+  $('voiceTest').onclick = async () => {
+    audioUnlock();
+    const was = S.settings.voice; S.settings.voice = true;
+    announce('test');
+    S.settings.voice = was;
+    setTimeout(() => { $('audioDiag').textContent = audioDiag(); T('audio', audioDiag()); }, 1500);
+  };
+  document.addEventListener('pointerdown', audioUnlock, { capture: true, passive: true });
   $('menuBtn').onclick = () => { $('menu').hidden = false; renderMenu(); };
   $('menuClose').onclick = () => { $('menu').hidden = true; };
   $('modeGps').onclick = () => { setMode('gps'); renderMenu(); };
@@ -1961,6 +2022,7 @@ function bindUi() {
     if (document.hidden) return;
     tick();
     if (S.mode === 'gps') keepAwake(true);
+    if (actx?.state === 'suspended') actx.resume();
     checkUpdate();
   });
 }

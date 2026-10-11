@@ -175,3 +175,18 @@ ul.team { margin: 4px 0 8px; padding-left: 18px; }
 #gps { bottom: calc(46vh + 8px); font-size: 11px; padding: 3px 8px; }
 .update-bar { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 8px); z-index: 40; border: 0; border-radius: 12px;
   background: #2b8a3e; color: #fff; font: inherit; font-weight: 700; padding: 12px; box-shadow: var(--shadow); cursor: pointer; }
+
+/* Wysuwany panel: domyślnie zwinięty do nagłówka, mapa zajmuje prawie cały ekran */
+#sheet { max-height: 66px; overflow: hidden; padding-top: 4px; transition: max-height .25s ease; }
+#sheet.open { max-height: 52vh; overflow-y: auto; }
+#grip { display: flex; justify-content: center; padding: 4px 0 8px; cursor: grab; touch-action: none; }
+#grip span { width: 44px; height: 5px; border-radius: 3px; background: var(--line); }
+#sheet .card-title { cursor: pointer; flex-wrap: wrap; font-size: 16px; }
+#sheet .peekinfo { font-size: 13px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+#sheet.open .peekinfo { white-space: normal; }
+#cargo { margin-top: 10px; margin-bottom: 0; }
+#recenter { bottom: calc(var(--sheet, 66px) + 10px); }
+#gps { bottom: calc(var(--sheet, 64px) + 14px); }
+#toasts { bottom: calc(var(--sheet, 64px) + 60px); }
+.maplibregl-ctrl-bottom-right { bottom: var(--sheet, 64px); }
+#chips { overflow: hidden; }

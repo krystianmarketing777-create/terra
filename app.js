@@ -908,7 +908,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v22';
+const APP_VERSION = 'v23';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -1692,8 +1692,11 @@ function renderCard() {
   const own = h.owner ? owner(h.owner) : null;
   const ownLabel = !own ? 'neutralny'
     : `<span class="dot" style="background:${own.color}"></span> ${own.name}${own.lvl ? ` <span class="muted">poz. ${own.lvl}</span>` : ''}${own.npc ? `<br><span class="muted">Dzikie ziemie: ${own.lore}</span>` : ''}`;
-  let html = `<div class="card-title"><span class="dot" style="background:${t.color}"></span>${h.blocked ? 'Teren wyłączony' : h.pending ? 'Rozpoznaję teren z mapy…' : t.label}
-    <span class="muted">${here ? '· tu jesteś' : '· podgląd'}</span></div>`;
+  const peek = h.blocked ? 'wyłączony z gry'
+    : h.owner === ME ? `Twój${isSeat(h) ? ', Siedziba' : ''}${h.store >= 1 ? `, w magazynie ${Math.floor(h.store)}` : ''}`
+    : `${own ? own.name : 'neutralny'}${here ? `, do zajęcia ${metersToCapture(h)} m` : ''}`;
+  let html = `<div class="card-title"><span class="dot" style="background:${t.color}"></span>${h.blocked ? 'Teren wyłączony' : h.pending ? 'Rozpoznaję teren…' : t.label}
+    <span class="muted peekinfo">${here ? '' : 'podgląd · '}${peek}</span></div>`;
   if (h.blocked) {
     html += '<p class="muted">Woda, tory albo autostrada. Tu nie da się zajmować terenu.</p>';
   } else {
@@ -1817,6 +1820,37 @@ function showHex(id) {
   render();
 }
 
+// ---------- Wysuwany panel na dole ----------
+// Zwinięty: tylko nagłówek heksu (typ, właściciel, ile do zajęcia). Rozwinięty: pełna karta.
+let sheetOpen = false;
+function setSheet(open) {
+  sheetOpen = open;
+  $('sheet').classList.toggle('open', open);
+  $('sheet').scrollTop = 0;
+  setTimeout(syncSheetHeight, 300);
+  T('sheet', open ? 1 : 0);
+}
+function syncSheetHeight() {
+  const h = Math.round($('sheet').getBoundingClientRect().height);
+  document.documentElement.style.setProperty('--sheet', h + 'px');
+  if ($('chips')) $('chips').style.maxHeight = `calc(100vh - ${h}px - ${Math.round($('top').getBoundingClientRect().bottom)}px - 70px)`;
+}
+function bindSheet() {
+  const sh = $('sheet');
+  new ResizeObserver(syncSheetHeight).observe(sh);
+  sh.addEventListener('transitionend', syncSheetHeight);
+  syncSheetHeight();
+  let y0 = null;
+  $('grip').addEventListener('pointerdown', e => { y0 = e.clientY; });
+  window.addEventListener('pointerup', e => {
+    if (y0 == null) return;
+    const dy = e.clientY - y0; y0 = null;
+    if (dy < -25) setSheet(true); else if (dy > 25) setSheet(false); else setSheet(!sheetOpen);
+  });
+  // Dotknięcie nagłówka karty też przełącza panel.
+  $('card').addEventListener('click', e => { if (e.target.closest('.card-title')) setSheet(!sheetOpen); });
+}
+
 // ---------- Tryb kieszonkowy ----------
 // Telefon w kieszeni: ciemny ekran (oszczędza baterię), ekran nie gaśnie, więc GPS działa. Wibracja i głos informują o zdarzeniach.
 const walk = { meters: 0, captured: 0, events: [] };
@@ -1920,11 +1954,15 @@ function initMap() {
       paint: { 'text-color': '#1d2129', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
     meMarker = new maplibregl.Marker({ element: avatarEl(), anchor: 'center' });
     mapReady = true;
+    // Podpis mapy zwinięty do ikonki „i” (rozwija się po dotknięciu), żeby nie zasłaniał wskaźnika GPS.
+    const collapseAttrib = () => document.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
+    collapseAttrib(); setTimeout(collapseAttrib, 1500); map.once('idle', collapseAttrib);
     render(); follow(true);
   });
   map.on('click', e => {
     const id = h3.latLngToCell(e.lngLat.lat, e.lngLat.lng, RES);
     sel = S.hexes[id] && id !== S.cur ? id : null;
+    setSheet(!!sel);
     render();
   });
   map.on('dragstart', () => { followOn = false; });
@@ -1938,13 +1976,13 @@ function bindUi() {
     const b = e.target.closest('button'); if (!b) return;
     const act = b.dataset.act;
     if (act === 'walk') { const [la, ln] = center(sel); sel = null; walkTo(la, ln); }
-    else if (act === 'back') { sel = null; followOn = true; follow(true); render(); }
+    else if (act === 'back') { sel = null; followOn = true; follow(true); setSheet(false); render(); }
     else if (act === 'build') build(b.dataset.t, sel || S.cur);
     else if (act === 'duel') openDuel(sel || S.cur);
     else if (act === 'collect') collectRemote(sel || S.cur);
     else if (act === 'photo') startPhoto(sel || S.cur);
   });
-  $('recenter').onclick = () => { followOn = true; sel = null; follow(true); render(); };
+  $('recenter').onclick = () => { followOn = true; sel = null; follow(true); setSheet(false); render(); };
   $('chips').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     const c = b.dataset.chip;
@@ -2046,6 +2084,7 @@ function main() {
   if (S.team) teamConnect();
   setInterval(() => { if (S.team && S.pos && Date.now() - lastPub > 20e3) { lastPub = Date.now(); teamPub({ k: 'pos', lat: r5(S.pos[0]), lng: r5(S.pos[1]) }); } }, 10e3);
   bindUi();
+  bindSheet();
   renderInstall();
   initMap();
   tick();

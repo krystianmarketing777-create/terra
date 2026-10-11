@@ -841,7 +841,7 @@ function setMode(m) {
 // ---------- Rejestrator testu ----------
 // Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
 // można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
-const APP_VERSION = 'v17';
+const APP_VERSION = 'v18';
 const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
 const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
 let tSessions = [];
@@ -980,7 +980,8 @@ function openDuel(id) {
   if (now < (h.protect || 0)) { toast('Heks jest pod ochroną po niedawnym przejęciu.'); return; }
   if (now < (h.duelCd || 0)) { toast('Ten heks możesz wyzwać ponownie za ' + Math.ceil((h.duelCd - now) / 60e3) + ' min.'); return; }
   if (S.inv.monety < DUEL_STAKE) { toast('Na stawkę potrzeba 10 monet.'); return; }
-  duel.id = id; duel.ghost = garrison(h); duel.score = 0; duel.boss = null;
+  duel.id = id; duel.ghost = garrison(h); duel.score = 0; duel.boss = null; duel.team = null;
+  resetDuelButtons();
   { const intro = $('dIntro'), ps = intro.querySelectorAll('p');
     intro.querySelector('h2').textContent = 'Pojedynek o heks';
     ps[0].textContent = 'Trafiaj w cel przez 20 sekund. Pudło odejmuje punkt. Pobij wynik garnizonu obrońcy.';
@@ -1012,6 +1013,7 @@ function hopTarget() {
 function finishDuel() {
   clearInterval(duel.timer); clearTimeout(duel.hop);
   $('target').style.display = 'none';
+  if (duel.team) { duel.boss = null; finishTeamFight(); return; }
   if (duel.boss) { $('duel').hidden = true; finishBoss(); return; }
   const h = S.hexes[duel.id], defender = h.owner, now = Date.now();
   if (duel.score > duel.ghost && defender && defender !== ME) {
@@ -1166,6 +1168,7 @@ function onTeamMsg(d) {
     T('team', { mate: d.name });
     if (d.k === 'hello') teamPub({ k: 'pos', lat: S.pos ? r5(S.pos[0]) : null, lng: S.pos ? r5(S.pos[1]) : null });
   }
+  if (['fight', 'fjoin', 'fscore', 'fresult'].includes(d.k)) { onFightMsg(d); return; }
   if (d.k === 'cap' && d.cell && S.hexes[d.cell]) {
     const h = S.hexes[d.cell], key = 'tm:' + d.pid;
     if (h.owner === ME) h.shared = d.name;
@@ -1292,6 +1295,8 @@ function openBoss(b) {
   ps[0].textContent = `${b.lore} Trafiaj w cel przez 20 sekund i pobij wynik ${duel.ghost}.${together ? ' Drużyna obok osłabia bossa!' : ''}`;
   ps[1].textContent = `Bez stawki. Nagroda: ${costText(b.reward)} i 50 pkt.`;
   $('dGhost').textContent = duel.ghost; $('dScore').textContent = 0; $('dTime').textContent = DUEL_SECONDS;
+  resetDuelButtons();
+  $('dTeam').hidden = !(S.team && together);
   intro.hidden = false; $('target').style.display = 'none';
   $('duel').hidden = false;
   T('boss', { open: b.id, ghost: duel.ghost, team: together });
@@ -1423,6 +1428,138 @@ function streakCapture() {
     say(`Seria ${S.streak.n}. Nie zatrzymuj się.`);
     T('streak', { n: S.streak.n, m });
   }
+}
+
+// ---------- Walka drużynowa z bossem ----------
+// Lider zaprasza drużynę, oba telefony startują w tej samej chwili (czas bezwzględny), wyniki się sumują
+// i trzeba przebić podwojony wynik bossa. Lider zbiera wyniki i ogłasza rozstrzygnięcie, nagrodę dostają wszyscy uczestnicy.
+const FIGHT_DELAY = 10e3, FIGHT_COLLECT = 6e3, TEAM_BONUS = { monety: 25 };
+const fights = {};
+let fightTimer = null;
+function teamFightStart() {
+  const b = duel.boss;
+  if (!b || !S.team) return;
+  const fid = Math.random().toString(36).slice(2, 8);
+  const ghost = b.power * 2 + Math.floor(Math.random() * 5);
+  const f = fights[fid] = { fid, boss: b.id, ghost, startAt: Date.now() + FIGHT_DELAY, leader: true, scores: {}, names: { [S.pid]: meInfo().name }, joined: new Set() };
+  duel.team = f;
+  teamPub({ k: 'fight', fid, boss: b.id, ghost, startAt: f.startAt });
+  T('fight', { start: fid, boss: b.id, ghost });
+  waitForStart(f, `Zaproszenie wysłane. Gdy drużyna dołączy, gracie razem przeciw ${ghost} pkt.`);
+}
+// Odliczanie do wspólnego startu.
+function waitForStart(f, msg) {
+  const b = BOSSES.find(x => x.id === f.boss), intro = $('dIntro'), ps = intro.querySelectorAll('p');
+  intro.querySelector('h2').textContent = `${b.emoji} Walka drużynowa: ${b.name}`;
+  $('dGhost').textContent = f.ghost;
+  $('dGo').hidden = true; $('dTeam').hidden = true;
+  intro.hidden = false; $('duel').hidden = false;
+  clearInterval(fightTimer);
+  fightTimer = setInterval(() => {
+    const left = Math.ceil((f.startAt - Date.now()) / 1000);
+    const who = f.leader ? (f.joined.size ? `Dołączyli: ${[...f.joined].map(p => f.names[p] || '?').join(', ')}.` : 'Czekam na drużynę…') : '';
+    ps[0].textContent = msg;
+    ps[1].textContent = `Start za ${Math.max(0, left)} s. ${who}`;
+    if (left > 0) return;
+    clearInterval(fightTimer);
+    if (f.leader && !f.joined.size) {
+      // Nikt nie dołączył: zwykła walka solo z bonusem za drużynę w pobliżu.
+      duel.team = null;
+      duel.ghost = BOSSES.find(x => x.id === f.boss).power + Math.floor(Math.random() * 4) - (teamNear() ? 6 : 0);
+      $('dGhost').textContent = duel.ghost;
+      toast('Nikt nie dołączył. Walczysz sam.');
+      T('fight', { solo: f.fid });
+    }
+    resetDuelButtons();
+    duel.score = 0;
+    startDuel();
+  }, 250);
+}
+function resetDuelButtons() { $('dGo').hidden = false; $('dGo').textContent = 'Start'; $('dTeam').hidden = true; }
+// Zaproszenie od lidera: wibracja i okno „Dołącz”.
+function onFightInvite(d) {
+  const b = BOSSES.find(x => x.id === d.boss);
+  if (!b || d.startAt < Date.now() + 1500 || !$('duel').hidden) return;
+  const near = S.pos && dist(S.pos, [b.lat, b.lng]) <= BOSS_RANGE * 2;
+  if (!near) { log(`${d.emoji} ${d.name} walczy z bossem ${b.name}. Podejdź bliżej, żeby dołączyć następnym razem.`, true); return; }
+  const f = fights[d.fid] = { fid: d.fid, boss: d.boss, ghost: d.ghost, startAt: d.startAt, leader: false, leaderPid: d.pid, leaderName: d.name };
+  buzz('quest');
+  say(`${d.name} zaprasza do walki z bossem.`);
+  duel.boss = b; duel.id = null; duel.score = 0; duel.ghost = d.ghost; duel.team = null;
+  const intro = $('dIntro'), ps = intro.querySelectorAll('p');
+  intro.querySelector('h2').textContent = `${b.emoji} ${d.name} wzywa do walki!`;
+  ps[0].textContent = `Wspólna walka z bossem ${b.name}. Wyniki się sumują, razem musicie przebić ${d.ghost} pkt.`;
+  ps[1].textContent = 'Nagroda dla wszystkich uczestników i premia za współpracę.';
+  $('dGhost').textContent = d.ghost; $('dScore').textContent = 0; $('dTime').textContent = DUEL_SECONDS;
+  $('dGo').hidden = false; $('dGo').textContent = 'Dołącz'; $('dTeam').hidden = true;
+  intro.hidden = false; $('target').style.display = 'none'; $('duel').hidden = false;
+  duel.pendingJoin = f;
+  T('fight', { invite: d.fid, boss: d.boss });
+}
+function joinFight() {
+  const f = duel.pendingJoin;
+  duel.pendingJoin = null;
+  if (!f || Date.now() > f.startAt) { toast('Za późno, walka już się zaczęła.'); $('duel').hidden = true; resetDuelButtons(); return; }
+  duel.team = f;
+  teamPub({ k: 'fjoin', fid: f.fid });
+  T('fight', { join: f.fid });
+  waitForStart(f, `Dołączono. Razem z ${f.leaderName} przeciw ${f.ghost} pkt.`);
+}
+// Koniec 20 sekund u gracza: wysyłamy wynik, lider czeka na pozostałych.
+function finishTeamFight() {
+  const f = duel.team, my = duel.score;
+  duel.team = null;
+  teamPub({ k: 'fscore', fid: f.fid, score: my });
+  T('fight', { myScore: my, fid: f.fid });
+  const intro = $('dIntro'), ps = intro.querySelectorAll('p');
+  intro.querySelector('h2').textContent = `Twój wynik: ${my}`;
+  ps[0].textContent = 'Czekam na wyniki drużyny…'; ps[1].textContent = '';
+  $('dGo').hidden = true; $('dTeam').hidden = true;
+  intro.hidden = false; $('duel').hidden = false;
+  if (f.leader) {
+    f.scores[S.pid] = my;
+    setTimeout(() => {
+      const total = Object.values(f.scores).reduce((a, v) => a + v, 0), win = total > f.ghost;
+      const names = Object.keys(f.scores).map(p => f.names[p] || '?');
+      teamPub({ k: 'fresult', fid: f.fid, total, ghost: f.ghost, win, names, boss: f.boss });
+      applyFightResult(f, { total, ghost: f.ghost, win, names });
+    }, FIGHT_COLLECT);
+  } else {
+    f.timeout = setTimeout(() => { if (!f.done) { toast('Brak wyniku od lidera. Spróbujcie jeszcze raz.'); $('duel').hidden = true; resetDuelButtons(); } }, FIGHT_COLLECT + 10e3);
+  }
+}
+function applyFightResult(f, r) {
+  if (f.done) return;
+  f.done = true;
+  clearTimeout(f.timeout);
+  const b = BOSSES.find(x => x.id === f.boss);
+  $('duel').hidden = true; resetDuelButtons();
+  T('fight', { result: f.fid, total: r.total, ghost: r.ghost, win: r.win });
+  if (r.win) {
+    (S.bossDone ??= {})[b.id] = today();
+    const reward = { ...b.reward };
+    for (const [k, v] of Object.entries(TEAM_BONUS)) reward[k] = (reward[k] || 0) + v;
+    for (const [k, v] of Object.entries(reward)) S.inv[k] = (S.inv[k] || 0) + v;
+    S.stats.bosses = (S.stats.bosses || 0) + 1;
+    S.stats.teamFights = (S.stats.teamFights || 0) + 1;
+    buzz('quest');
+    flash(`${b.emoji} Pokonany razem!`, `${r.total}:${r.ghost} · ${r.names.join(' + ')}`);
+    say(`Razem pokonaliście: ${b.name}.`);
+    log(`Walka drużynowa wygrana: ${b.name} ${r.total}:${r.ghost} (${r.names.join(', ')}). Nagroda: ${costText(reward)}, 50 pkt`, false);
+  } else {
+    (S.bossCd ??= {})[b.id] = Date.now() + 5 * 60e3;
+    log(`${b.name} obronił się przed drużyną (${r.total}:${r.ghost}). Spróbujcie za 5 minut.`, true);
+  }
+  scoreCache.t = 0;
+  save(); render();
+}
+function onFightMsg(d) {
+  if (d.k === 'fight') return onFightInvite(d);
+  const f = fights[d.fid];
+  if (!f) return;
+  if (d.k === 'fjoin' && f.leader) { f.joined.add(d.pid); f.names[d.pid] = d.name; buzz('toll'); }
+  else if (d.k === 'fscore' && f.leader) { f.scores[d.pid] = d.score; f.names[d.pid] = d.name; }
+  else if (d.k === 'fresult' && !f.leader) applyFightResult(f, d);
 }
 
 // ---------- Ranking okolicy ----------
@@ -1758,8 +1895,9 @@ function bindUi() {
   };
   $('startGps').onclick = () => { $('start').hidden = true; setMode('gps'); if (!S.profile) openAvatar(); };
   $('startTest').onclick = () => { $('start').hidden = true; setMode('test'); if (!S.profile) openAvatar(); };
-  $('dGo').onclick = startDuel;
-  $('dCancel').onclick = () => { $('duel').hidden = true; };
+  $('dGo').onclick = () => { if (duel.pendingJoin) joinFight(); else startDuel(); };
+  $('dTeam').onclick = teamFightStart;
+  $('dCancel').onclick = () => { $('duel').hidden = true; duel.pendingJoin = null; clearInterval(fightTimer); resetDuelButtons(); };
   $('target').addEventListener('pointerdown', e => {
     e.stopPropagation();
     duel.score++; $('dScore').textContent = duel.score; hopTarget();

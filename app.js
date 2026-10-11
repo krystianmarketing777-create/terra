@@ -803,6 +803,7 @@ function notify(title, body) {
 // GPS
 let watchId = null, lastFix = null;
 function setMode(m) {
+  T('mode', m);
   if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   if (NATIVE) nativeStopGps();
   clearInterval(walkTimer);
@@ -824,27 +825,79 @@ function setMode(m) {
   if (S.mode === 'test' && !S.pos) teleport(...DEFAULT_START);
   save(); render();
 }
+// ---------- Rejestrator testu ----------
+// Zapisuje przebieg spaceru (każdy odczyt GPS i co z nim zrobiła gra) oraz zdarzenia, żeby po teście w terenie
+// można było wysłać plik do analizy. Dane zostają na telefonie, dopóki gracz sam ich nie wyśle.
+const APP_VERSION = 'v14';
+const TLOG_KEY = 'terra.tlog', TLOG_MAX = 25000;
+const tSession = { id: new Date().toISOString(), started: Date.now(), entries: [] };
+let tSessions = [];
+try { tSessions = JSON.parse(localStorage.getItem(TLOG_KEY)) || []; } catch (e) { tSessions = []; }
+tSessions = tSessions.slice(-4);
+tSessions.push(tSession);
+let tSaveTimer = null;
+function T(type, data) {
+  if (tSession.entries.length >= TLOG_MAX) return;
+  tSession.entries.push([Date.now() - tSession.started, type, data ?? null]);
+  clearTimeout(tSaveTimer);
+  tSaveTimer = setTimeout(saveTlog, 2000);
+}
+function saveTlog() {
+  try { localStorage.setItem(TLOG_KEY, JSON.stringify(tSessions)); }
+  catch (e) { tSessions = tSessions.slice(-1); try { localStorage.setItem(TLOG_KEY, JSON.stringify(tSessions)); } catch (e2) { /* pełna pamięć */ } }
+}
+const r5 = v => Math.round(v * 1e5) / 1e5, r1 = v => (v == null ? null : Math.round(v * 10) / 10);
+let battery = null;
+navigator.getBattery?.().then(b => { battery = b; }).catch(() => {});
+function snapshot() {
+  T('snap', { score: scoreOf(ME), hexes: Object.values(S.hexes).filter(h => h.owner === ME).length, inv: { ...S.inv },
+    km: r1(S.stats.meters / 1000), q: S.q, bat: battery ? Math.round(battery.level * 100) : null, charging: battery?.charging ?? null,
+    hidden: document.hidden, pocket: !$('pocket').hidden, wake: !!wakeLock, mode: S.mode });
+}
+async function exportTest() {
+  saveTlog();
+  const data = { app: 'terra', version: APP_VERSION, exported: new Date().toISOString(), ua: navigator.userAgent,
+    standalone: isStandalone(), native: NATIVE, profile: S.profile, stats: S.stats, sessions: tSessions };
+  const name = `terra-test-${(S.profile?.name || 'gracz').replace(/[^\w.-]/g, '')}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+  try {
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: 'Dane z testu Terra' }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('Zapisano plik w Pobranych.');
+}
+function renderTinfo() {
+  const n = tSession.entries.length, fixes = tSession.entries.filter(e => e[1] === 'fix').length;
+  const min = Math.round((Date.now() - tSession.started) / 60e3);
+  $('tinfo').textContent = `Ten spacer: ${min} min, ${fixes} odczytów GPS, ${n} wpisów. Zapisanych spacerów: ${tSessions.length}.`;
+}
+
 // Diagnostyka GPS widoczna w menu, bo stan gry istnieje tylko na telefonie.
 const diag = { fixes: 0, badAcc: 0, jitter: 0, tooFast: 0, counted: 0, meters: 0, acc: null, speed: null, last: null };
 function onFix(p) {
   const { latitude: lat, longitude: lng, accuracy: acc } = p.coords, t = p.timestamp;
   diag.fixes++; diag.acc = acc; diag.last = Date.now();
-  if (acc > 50 && S.pos && lastFix) { diag.badAcc++; setStatus(`Słaby sygnał GPS (±${Math.round(acc)} m), ruch wstrzymany`); renderGps(); return; }
+  const raw = { lat: r5(lat), lng: r5(lng), acc: r1(acc), gs: r1(p.coords.speed), alt: r1(p.coords.altitude), hid: document.hidden ? 1 : 0 };
+  if (acc > 50 && S.pos && lastFix) { T('fix', { ...raw, r: 'badacc' }); diag.badAcc++; setStatus(`Słaby sygnał GPS (±${Math.round(acc)} m), ruch wstrzymany`); renderGps(); return; }
   setStatus('');
-  if (!lastFix || !S.pos) { lastFix = { lat, lng, t }; followOn = true; moveTo(lat, lng, 0); renderGps(); return; }
+  if (!lastFix || !S.pos) { T('fix', { ...raw, r: 'first' }); lastFix = { lat, lng, t }; followOn = true; moveTo(lat, lng, 0); renderGps(); return; }
   const d = dist([lastFix.lat, lastFix.lng], [lat, lng]);
   // Drgania GPS: przesunięcie mniejsze niż dokładność odczytu (min. 10 m) czekamy, aż się zsumuje.
-  if (d < Math.max(10, acc * 1.2)) { diag.jitter++; renderGps(); return; }
+  if (d < Math.max(10, acc * 1.2)) { T('fix', { ...raw, r: 'jitter', d: r1(d) }); diag.jitter++; renderGps(); return; }
   const v = d / Math.max((t - lastFix.t) / 1000, 1);
   diag.speed = v;
   lastFix = { lat, lng, t };
   if (v > MAX_SPEED) {
+    T('fix', { ...raw, r: 'fast', d: r1(d), v: r1(v) });
     diag.tooFast++;
     setStatus('Za szybko (ponad 20 km/h): ten odcinek nie jest liczony');
     S.pos = [lat, lng]; S.cur = h3.latLngToCell(lat, lng, RES); ensureArea(lat, lng); render(); follow(); renderGps();
     return;
   }
   diag.counted++; diag.meters += d;
+  T('fix', { ...raw, r: 'ok', d: r1(d), v: r1(v), cell: h3.latLngToCell(lat, lng, RES) });
   moveTo(lat, lng, d);
   renderGps();
 }
@@ -983,6 +1036,7 @@ function toast(msg) {
   while ($('toasts').children.length > 3) $('toasts').firstChild.remove();
 }
 function log(msg, show = true) {
+  T('log', msg);
   S.log.unshift({ t: Date.now(), msg });
   S.log.length = Math.min(S.log.length, 60);
   if (show) toast(msg);
@@ -1150,6 +1204,7 @@ function renderCard() {
 }
 
 function renderMenu() {
+  renderTinfo();
   $('modeGps').classList.toggle('on', S.mode === 'gps');
   $('modeTest').classList.toggle('on', S.mode === 'test');
   $('setVibe').checked = !!S.settings.vibe;
@@ -1197,10 +1252,11 @@ function showHex(id) {
 const walk = { meters: 0, captured: 0, events: [] };
 let wakeLock = null;
 async function keepAwake(on) {
+  T('wake', on);
   try {
     if (on && !wakeLock && 'wakeLock' in navigator) {
       wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => { wakeLock = null; });
+      wakeLock.addEventListener('release', () => { wakeLock = null; T('wake', 'released'); });
     } else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
   } catch (e) { /* przeglądarka odmówiła */ }
 }
@@ -1334,8 +1390,10 @@ function bindUi() {
   $('avColors').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { avDraft.color = b.dataset.color; renderAvatarPreview(); } });
   $('avName').addEventListener('input', e => { avDraft.name = e.target.value.trim(); renderAvatarPreview(); });
   $('avSave').onclick = saveAvatar;
-  $('pocketBtn').onclick = () => { $('pocket').hidden = false; keepAwake(true); renderPocket(); };
-  $('pocket').addEventListener('dblclick', () => { $('pocket').hidden = true; });
+  $('pocketBtn').onclick = () => { $('pocket').hidden = false; T('pocket', 1); keepAwake(true); renderPocket(); };
+  $('pocket').addEventListener('dblclick', () => { $('pocket').hidden = true; T('pocket', 0); });
+  $('texport').onclick = exportTest;
+  $('tnoteAdd').onclick = () => { const v = $('tnote').value.trim(); if (!v) return; T('note', v); $('tnote').value = ''; toast('Notatka zapisana w danych testu.'); renderTinfo(); };
   $('photoInput').addEventListener('change', e => onPhoto(e.target.files[0]));
   $('setVibe').onchange = e => { S.settings.vibe = e.target.checked; save(); buzz('capture'); };
   $('setVoice').onchange = e => { S.settings.voice = e.target.checked; save(); say('Komunikaty głosowe włączone.'); };
@@ -1361,6 +1419,7 @@ function bindUi() {
     duel.score = Math.max(0, duel.score - 1); $('dScore').textContent = duel.score;
   });
   document.addEventListener('visibilitychange', () => {
+    T('vis', document.hidden ? 'hidden' : 'visible');
     if (document.hidden) return;
     tick();
     if (S.mode === 'gps') keepAwake(true);
@@ -1368,6 +1427,11 @@ function bindUi() {
 }
 
 function main() {
+  T('start', { version: APP_VERSION, ua: navigator.userAgent, standalone: isStandalone(), native: NATIVE, mode: S.mode });
+  window.addEventListener('error', e => T('error', String(e.message || e)));
+  window.addEventListener('unhandledrejection', e => T('error', String(e.reason?.message || e.reason)));
+  window.addEventListener('pagehide', saveTlog);
+  setInterval(snapshot, 60e3);
   bindUi();
   renderInstall();
   initMap();

@@ -16,7 +16,7 @@
 <meta property="og:url" content="https://krystianmarketing777-create.github.io/terra/">
 <meta property="og:type" content="website">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=13">
+<link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
 <header id="top">
@@ -75,6 +75,11 @@
     <h3>Powiadomienia</h3>
     <label class="row"><input type="checkbox" id="setVibe"> Wibracje (zdobycie, utrata, myto, szlak)</label>
     <label class="row"><input type="checkbox" id="setVoice"> Komunikaty głosowe (do słuchawek)</label>
+    <h3>Dane z testu</h3>
+    <p id="tinfo" class="muted"></p>
+    <div class="row"><input id="tnote" class="tnote" placeholder="Notatka, np. idę z Kasią, GPS skacze"><button id="tnoteAdd" class="btn">Dodaj</button></div>
+    <button id="texport" class="btn primary wide">Wyślij dane z testu</button>
+    <p class="muted">Plik z przebiegiem GPS i zdarzeniami gry z ostatnich spacerów. Zapisz go na Dysku Google w folderze „Terra testy”.</p>
     <h3>Diagnostyka GPS</h3>
     <div id="diag"></div>
     <h3>Statystyki</h3>
@@ -145,6 +150,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
-<script src="app.js?v=13"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>
